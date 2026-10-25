@@ -25,3 +25,4 @@ rtbkit/dox/html
 *.swp
 build/
 .omc/
+build-*/

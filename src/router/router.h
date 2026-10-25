@@ -11,7 +11,8 @@
 //      get TOOLATE, bad ones INVALID.
 //   3. All agents answered or expiry reached: banker cancelBid for every
 //      response that did not win; for each winning spot send a
-//      SubmittedAuctionEvent to the sink; auction->finish().
+//      SubmittedAuctionEvent to the sink; auction->finish(). An auction no
+//      agent was asked about is finished at once.
 #pragma once
 
 #include "banker/banker.h"
@@ -28,6 +29,16 @@ namespace RTBKIT {
 struct RouterConfig {
     /** ZeroMQ ROUTER endpoint that bidding agents connect to. */
     std::string agentEndpoint = "tcp://127.0.0.1:12340";
+
+    /** The router PINGs an agent that was silent this long. */
+    int pingIntervalMs = 1000;
+
+    /** An agent silent (no message at all, PONG included) this long is
+        dropped: its config is removed and its auctions count as answered. */
+    int agentTimeoutMs = 5000;
+
+    /** SubmittedAuctionEvent::lossTimeout = now + this. */
+    int lossTimeoutMs = 15000;
 
     /** All members optional. Throws std::runtime_error on bad types. */
     static RouterConfig fromJson(const nlohmann::json& j);
@@ -59,10 +70,18 @@ public:
     void onMatchedWinLoss(const MatchedWinLoss& event);
     void onMatchedCampaignEvent(const MatchedCampaignEvent& event);
 
+    /** The endpoint the agent socket is bound to (after start()). Useful with
+        "tcp://127.0.0.1:*", which binds a random free port. */
+    std::string boundEndpoint() const;
+
+    /** Thread safe counters: auctions, auctionsSent, noAgents, bids, invalid,
+        nobudget, toolate, expired, outbid, wins, losses, campaignEvents,
+        agents, auctionsInFlight. */
+    nlohmann::json stats() const;
+
 private:
-    RouterConfig config_;
-    std::shared_ptr<Banker> banker_;
-    // The implementation adds its own members (zmq context, thread, queues...).
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace RTBKIT

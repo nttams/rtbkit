@@ -1,4 +1,4 @@
-# Owner: router+agents. Add the bidding agent client library here.
+# Owner: router+agents.
 rtb_add_library(rtb_agent_config
     SOURCES
         agent_config.cc
@@ -10,4 +10,10 @@ rtb_add_library(rtb_agent_protocol
         protocol.cc
     DEPS rtb_agent_config rtb_common)
 
-rtb_add_area_tests(agent DEPS rtb_agent_protocol)
+# Bidding agent client: DEALER socket + own thread (needs ZeroMQ).
+rtb_add_library(rtb_bidding_agent
+    SOURCES
+        bidding_agent.cc
+    DEPS rtb_agent_protocol rtb_agent_config rtb_common cppzmq Threads::Threads)
+
+rtb_add_area_tests(agent DEPS rtb_bidding_agent)

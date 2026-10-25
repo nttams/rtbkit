@@ -81,6 +81,10 @@ protected:
         was set. */
     void submit(std::shared_ptr<Auction> auction) const;
 
+    /** For connectors whose name comes from configure(). Call before the
+        connector is registered with the router. */
+    void setExchangeName(std::string name) { name_ = std::move(name); }
+
 private:
     std::string name_;
     AuctionHandler handler_;

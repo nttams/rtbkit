@@ -5,4 +5,4 @@ rtb_add_library(rtb_router
     DEPS rtb_filters rtb_agent_protocol rtb_agent_config rtb_banker
          rtb_exchange rtb_common cppzmq Threads::Threads)
 
-rtb_add_area_tests(router DEPS rtb_router)
+rtb_add_area_tests(router DEPS rtb_router rtb_bidding_agent)
