@@ -23,3 +23,5 @@ bootstrap.json
 perf.data
 rtbkit/dox/html
 *.swp
+build/
+.omc/

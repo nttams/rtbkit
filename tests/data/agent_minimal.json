@@ -1,0 +1,9 @@
+{
+    "account": ["hello", "world"],
+    "bidProbability": 1.0,
+    "creatives": [
+        { "id": 0, "format": "728x90", "name": "LeaderBoard" },
+        { "id": 1, "format": "300x250", "name": "BigBox" }
+    ],
+    "maxInFlight": 50
+}

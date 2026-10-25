@@ -1,0 +1,18 @@
+{
+    "account": ["hello", "world"],
+    "externalId": 42,
+    "bidProbability": 0.8,
+    "minTimeAvailableMs": 10,
+    "maxInFlight": 100,
+    "creatives": [
+        { "id": 0, "format": "728x90", "name": "LeaderBoard",
+          "languageFilter": { "include": ["en"] } },
+        { "id": 1, "format": "300x250", "name": "BigBox", "dealId": "DEAL1" }
+    ],
+    "exchangeFilter": { "include": ["openrtb"] },
+    "foldPositionFilter": { "include": ["ABOVE", "BELOW"] },
+    "segmentFilter": { "audience": { "include": [1, 2], "excludeIfNotPresent": true } },
+    "userPartition": { "hashOn": "providerId", "modulus": 10, "includeRanges": [[0, 5]] },
+    "augmentations": { "frequency-cap-ex": { "required": true, "config": 42,
+                       "filters": { "include": ["pass-frequency-cap-ex"] } } }
+}
