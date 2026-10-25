@@ -18,15 +18,25 @@
 
 namespace RTBKIT {
 
+/** Collision safe key of one spot of one auction: "<len>:<auction>|<len>:<spot>".
+    The lengths make the join unambiguous whatever characters the ids hold. */
+inline std::string auctionSpotKey(const Id& auctionId, const Id& adSpotId)
+{
+    const std::string& a = auctionId.toString();
+    const std::string& s = adSpotId.toString();
+    return std::to_string(a.size()) + ":" + a + "|" + std::to_string(s.size()) + ":" + s;
+}
+
 /** Item id used with the Banker for one agent's bid on one spot of one
-    auction: "<auctionId>:<adSpotId>:<agent>". The agent is part of it so that
-    two agents bidding on the same spot with the same account get separate
-    reservations. The router (authorizeBid / cancelBid) and the post auction
-    service (winBid / cancelBid, using Response::agent) must agree on it. */
+    auction: "<len>:<auctionId>|<len>:<adSpotId>|<agent>" (see auctionSpotKey).
+    The agent is part of it so that two agents bidding on the same spot with
+    the same account get separate reservations. The router (authorizeBid /
+    cancelBid) and the post auction service (winBid / cancelBid, using
+    Response::agent) must agree on it. */
 inline std::string bidItemId(const Id& auctionId, const Id& adSpotId,
                              const std::string& agent)
 {
-    return auctionId.toString() + ":" + adSpotId.toString() + ":" + agent;
+    return auctionSpotKey(auctionId, adSpotId) + "|" + agent;
 }
 
 /** Router -> post auction: "we answered this spot with this bid". */

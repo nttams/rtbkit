@@ -50,6 +50,10 @@ the connector answers 204.
   hands work to it through a queue (`Router::injectAuction`,
   `onMatchedWinLoss`, ...) or the zmq socket (the socket is only used by the
   loop thread; use a `zmq::socket_t` per thread or an inproc pipe).
+  An exception in the loop (a banker that throws, a bad connector config) is
+  caught, logged and counted in the router `errors` stat; it never ends the
+  process. A banker failure while accepting a bid means `NOBUDGET`; at the end
+  of an auction every banker call is guarded, so `auction->finish()` always runs.
 - **Exchange connector: own HTTP threads** (httplib). Each request thread calls
   `submit(auction)` then blocks on the result. The completion callback runs on
   the router thread: it must only fulfil a promise / condition variable.
@@ -67,7 +71,8 @@ All prices are `Amount` per impression in micro-units of a currency:
 `USD_CPM(1.5) == 1500 micro USD`. Bid prices, floors (`AdSpot::reservePrice`),
 banker budgets and win prices use the same unit. OpenRTB prices are CPM in
 currency units: convert with `Amount::fromCpm(code, cpm)` / `amount.toCpm()`.
-Only USD works for now (mixing currencies throws).
+Only USD works for now (mixing currencies throws). The router answers a bid in
+another currency with `INVALID`.
 
 ## Contracts (headers)
 
@@ -103,7 +108,7 @@ connector the filters see; `ExchangeConnector` derives from it.
 
 ### Banker rules
 
-Item id is `bidItemId(auctionId, adSpotId, agent)` = `auction:spot:agent`, so two
+Item id is `bidItemId(auctionId, adSpotId, agent)` = `<len>:<auction>|<len>:<spot>|<agent>` (length prefixed, so ids holding `:` or `|` cannot collide; the post auction table key is the same without the agent), so two
 agents with the same account never share a reservation. The post auction service
 builds the same id from `Response::agent` of the submitted bid. Router: `authorizeBid(account,
 item, bid price)` when a BID arrives (refused: send `NOBUDGET`, drop the bid).
@@ -150,6 +155,15 @@ filters reject the config.
 | 12360 | ad server (`/win`, `/impression`, `/click`, `/stats`) |
 | 12370 | admin HTTP of `rtbkit_router` (`GET /stats`: router, connector, post auction, banker JSON) |
 
+### Security
+
+There is no authentication. The zmq agent identity is taken at face value (anyone
+who can reach the router port can register as, and receive WIN/LOSS for, any agent
+name), and the ad server `/win`, `/impression`, `/click` endpoints and the admin
+HTTP are open. The post auction service limits the damage of a forged `/win`
+(price is capped at the bid price, tables are size capped) but cannot stop it.
+Trusted network only; the defaults bind 127.0.0.1.
+
 ### Win notice URL
 
 The connector puts `nurl = <winNoticeUrl>?auctionId=<id>&adSpotId=<imp id>&price=${AUCTION_PRICE}`
@@ -164,7 +178,9 @@ calls the nurl with its clearing price in CPM; `/win` turns it back with
 **The exchange's clearing price wins**: the router does not apply `WinCostModel`
 to the settlement, a second price auction simply clears below the bid and the
 exchange says so in `${AUCTION_PRICE}`. (The router reserves the full bid price,
-the difference is released at the win.)
+the difference is released at the win.) The price charged is capped at the bid
+price: `min(win price, bid price)`; a notice above it is counted as `clamped` in
+the post auction stats.
 
 ## Running it
 

@@ -13,7 +13,7 @@
 //    "exchange":    OpenRtbExchangeConnector::configure keys,
 //    "adserver":    AdServer::configure keys,
 //    "postAuction": {"earlyWinTimeoutMs", "finishedWindowMs", "lostWindowMs",
-//                    "tickIntervalMs"},
+//                    "tickIntervalMs", "maxEntries"},
 //    "admin":       {"host": "127.0.0.1", "port": 12370}}   // absent = no admin HTTP
 // "exchange.winNoticeUrl" defaults to the ad server's /win on the port it is
 // really listening on (so "adserver": {"port": 0} works).

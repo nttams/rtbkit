@@ -50,6 +50,7 @@ struct RecordingBanker : public NullBanker {
     bool authorizeBid(const AccountKey& account, const std::string& item,
                       const Amount&) override
     {
+        if (throwOnAuthorize) throw std::runtime_error("banker connection lost");
         std::lock_guard lock(mutex);
         authorized.insert(account.toString() + "|" + item);
         return !account.hasPrefix(AccountKey("poor"));
@@ -57,6 +58,7 @@ struct RecordingBanker : public NullBanker {
 
     void cancelBid(const AccountKey& account, const std::string& item) override
     {
+        if (throwOnCancel) throw std::runtime_error("banker connection lost");
         std::lock_guard lock(mutex);
         cancelled.insert(account.toString() + "|" + item);
     }
@@ -64,6 +66,7 @@ struct RecordingBanker : public NullBanker {
     std::set<std::string> authorizedItems() { std::lock_guard l(mutex); return authorized; }
     std::set<std::string> cancelledItems() { std::lock_guard l(mutex); return cancelled; }
 
+    std::atomic<bool> throwOnAuthorize{false}, throwOnCancel{false};
     std::mutex mutex;
     std::set<std::string> authorized, cancelled;
 };
@@ -84,7 +87,7 @@ struct TestAgent {
                 Bid bid;
                 bid.spotIndex = 0;
                 bid.creativeIndex = creative;
-                bid.price = USD_CPM(this->cpm);
+                bid.price = eur ? EUR_CPM(this->cpm) : USD_CPM(this->cpm);
                 bid.bidData = "bid-data";
                 bids.push_back(bid);
             }
@@ -109,6 +112,7 @@ struct TestAgent {
     double cpm;
     int creative = 0;
     std::atomic<bool> silent{false};
+    std::atomic<bool> eur{false};   // bid in a foreign currency
     std::atomic<int> auctions{0}, wins{0}, losses{0}, campaignEvents{0}, nobudget{0},
         toolate{0}, invalid{0};
     Amount lastWinPrice;
@@ -547,4 +551,150 @@ TEST_CASE("router: stop finishes the auctions in flight")
     auto late = env->submit("auction-after-stop", 10000);
     REQUIRE(late.waitDone(500ms));
     env->router.stop();   // twice is fine
+}
+
+TEST_CASE("router: a bid in a foreign currency is INVALID and the router stays alive")
+{
+    Env env;
+    auto euro = env.addAgent("euro", "acct:euro", 5.0);
+    euro->eur = true;
+    auto dollar = env.addAgent("dollar", "acct:dollar", 1.0);
+
+    auto run = env.submit("auction-eur");
+    REQUIRE(run.waitDone());
+    REQUIRE(waitUntil([&] { return euro->invalid == 1; }));
+    CHECK(euro->reason().find("currency") != std::string::npos);
+    CHECK(dollar->invalid == 0);
+
+    auto best = run.auction->bestResponse(0);
+    REQUIRE(best);
+    CHECK(best->agent == "dollar");
+    CHECK(env.banker->authorizedItems().size() == 1);   // the euro bid never reached the banker
+
+    // Still serving.
+    euro->eur = false;
+    auto again = env.submit("auction-eur-2");
+    REQUIRE(again.waitDone());
+    CHECK(again.auction->bestResponse(0)->agent == "euro");
+    CHECK(env.router.stats()["errors"] == 0);
+}
+
+TEST_CASE("router: a banker that throws on authorize gives NOBUDGET and the auction finishes")
+{
+    Env env;
+    env.banker->throwOnAuthorize = true;
+    auto agent = env.addAgent("a", "acct:a", 2.0);
+
+    auto run = env.submit("auction-throw");
+    REQUIRE(run.waitDone());
+    REQUIRE(waitUntil([&] { return agent->nobudget == 1; }));
+    CHECK_FALSE(run.auction->bestResponse(0));
+    CHECK(env.router.stats()["errors"] == 1);
+    CHECK(env.router.stats()["nobudget"] == 1);
+
+    // The loop survived: a healthy banker works on the next auction.
+    env.banker->throwOnAuthorize = false;
+    auto next = env.submit("auction-after-throw");
+    REQUIRE(next.waitDone());
+    CHECK(next.auction->bestResponse(0));
+}
+
+TEST_CASE("router: a banker that throws on cancel still finishes the auction and feeds winners")
+{
+    Env env;
+    auto low = env.addAgent("low", "acct:low", 2.0);
+    auto high = env.addAgent("high", "acct:high", 3.0);
+    env.banker->throwOnCancel = true;
+
+    auto run = env.submit("auction-cancel-throw", 1000);
+    REQUIRE(run.waitDone());
+    REQUIRE(env.submittedEvents().size() == 1);
+    CHECK(env.submittedEvents()[0].bid.agent == "high");
+    REQUIRE(waitUntil([&] { return low->losses == 1; }));
+    CHECK(env.router.stats()["errors"] == 1);
+
+    env.banker->throwOnCancel = false;
+    auto next = env.submit("auction-after-cancel-throw");
+    REQUIRE(next.waitDone());
+}
+
+TEST_CASE("router: a connector that throws in prepareConfig gives ERROR, not a crash")
+{
+    struct ThrowingExchange : public FakeExchange {
+        std::shared_ptr<void> getProviderData(const AgentConfig&) const override
+        {
+            throw std::runtime_error("bad provider data");
+        }
+    };
+    auto banker = std::make_shared<RecordingBanker>();
+    Router router(Env::fastConfig(), banker);
+    router.addExchange(std::make_shared<ThrowingExchange>());
+    router.start();
+
+    zmq::context_t context;
+    zmq::socket_t dealer(context, zmq::socket_type::dealer);
+    dealer.set(zmq::sockopt::routing_id, "raw");
+    dealer.set(zmq::sockopt::linger, 0);
+    dealer.connect(router.boundEndpoint());
+
+    zmqutil::sendFrames(dealer, protocol::encode(
+        protocol::ConfigMsg{"raw", sampleAgentConfig("raw", "acct:raw")}));
+    std::vector<std::string> reply;
+    REQUIRE(zmqutil::recvFramesWait(dealer, reply, 2000ms));
+    REQUIRE_FALSE(reply.empty());
+    CHECK(reply[0] == "ERROR");
+
+    // The loop is alive: the next message is answered (unknown agent).
+    zmqutil::sendFrames(dealer, {"PING", "token"});
+    REQUIRE(zmqutil::recvFramesWait(dealer, reply, 2000ms));
+    CHECK(reply[0] == "NEEDCONFIG");
+}
+
+TEST_CASE("router: win and loss events after stop and destruction do not crash")
+{
+    auto env = std::make_unique<Env>();
+    auto agent = env->addAgent("a", "acct:a", 2.0);
+
+    MatchedWinLoss event;
+    event.type = MatchedWinLoss::Type::WIN;
+    event.auctionId = Id("x");
+    event.adSpotId = Id(uint64_t(1));
+    event.bid = sampleResponse(0, 1.0, "a");
+
+    env->router.stop();
+    env->router.onMatchedWinLoss(event);
+    MatchedCampaignEvent campaign;
+    campaign.bid = event.bid;
+    env->router.onMatchedCampaignEvent(campaign);
+    env->router.stop();
+    CHECK(env->router.stats()["wins"] == 0);
+    CHECK(env->router.stats()["campaignEvents"] == 0);
+    CHECK(env->router.stats()["agents"] == 0);
+    env.reset();   // ~Router stops again
+    SUCCEED();
+}
+
+TEST_CASE("router: events queued just before stop do not crash")
+{
+    // Events posted from another thread while stop() runs hit a router with
+    // no socket; they must be dropped.
+    auto env = std::make_unique<Env>();
+    auto agent = env->addAgent("a", "acct:a", 2.0);
+    MatchedWinLoss event;
+    event.type = MatchedWinLoss::Type::WIN;
+    event.bid = sampleResponse(0, 1.0, "a");
+
+    std::atomic<bool> go{true};
+    std::thread poster([&] {
+        while (go) {
+            env->router.onMatchedWinLoss(event);
+            std::this_thread::sleep_for(100us);
+        }
+    });
+    std::this_thread::sleep_for(20ms);
+    env->router.stop();
+    go = false;
+    poster.join();
+    env.reset();
+    SUCCEED();
 }

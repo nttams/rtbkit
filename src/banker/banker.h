@@ -2,7 +2,7 @@
 //
 // An account has a budget. Before a bid is sent to the exchange the router
 // calls authorizeBid(): the amount is reserved ("in flight") under an item id
-// (use "<auctionId>:<adSpotId>"). Later exactly one of these happens:
+// (the router and post auction use bidItemId() from common/events.h). Later exactly one of these happens:
 //   winBid      the reservation is released and `paid` is spent
 //   cancelBid   the reservation is released, nothing is spent (loss, timeout)
 //   forceWinBid a win with no reservation (late win notice): `paid` is spent

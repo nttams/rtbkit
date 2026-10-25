@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <random>
@@ -19,6 +20,9 @@ namespace RTBKIT {
 using nlohmann::json;
 using Clock = Auction::Clock;
 using TimePoint = Auction::TimePoint;
+
+/** Budgets and floors are in this currency (see docs/ARCHITECTURE.md, Units). */
+constexpr CurrencyCode kBidCurrency = CurrencyCode::USD;
 
 RouterConfig RouterConfig::fromJson(const json& j)
 {
@@ -56,7 +60,7 @@ struct Router::Impl {
     struct Stats {
         std::atomic<uint64_t> auctions{0}, auctionsSent{0}, noAgents{0}, bids{0},
             invalid{0}, nobudget{0}, toolate{0}, expired{0}, outbid{0}, wins{0},
-            losses{0}, campaignEvents{0}, agents{0}, auctionsInFlight{0};
+            losses{0}, campaignEvents{0}, agents{0}, auctionsInFlight{0}, errors{0};
     };
 
     struct AgentState {
@@ -116,12 +120,66 @@ struct Router::Impl {
     std::multimap<TimePoint, std::string> expiries;
     std::mt19937 rng;
     bool stopping = false;
+    bool logged = false;            // error log rate limit, see logError
+    TimePoint lastErrorLog;
+    uint64_t suppressedLogs = 0;
 
+    /** Counts and logs an exception that was caught instead of killing the loop. */
+    void noteError(const char* where, const std::exception& e)
+    {
+        logError(where, e.what());
+    }
+
+    void noteError(const char* where) { logError(where, "unknown exception"); }
+
+    /** Every error is counted; the log is rate limited (one line per second,
+        with the number of lines skipped) so a failing socket cannot flood it. */
+    void logError(const char* where, const char* what)
+    {
+        ++stats.errors;
+        const auto now = Clock::now();
+        if (logged && now - lastErrorLog < std::chrono::seconds(1)) {
+            ++suppressedLogs;
+            return;
+        }
+        std::cerr << "router: " << where << ": " << what;
+        if (suppressedLogs) std::cerr << " (" << suppressedLogs << " similar errors not shown)";
+        std::cerr << std::endl;
+        logged = true;
+        lastErrorLog = now;
+        suppressedLogs = 0;
+    }
+
+    /** Runs `body`; an exception is logged and counted, never propagated. */
+    template<typename F>
+    void guarded(const char* where, F&& body)
+    {
+        try {
+            body();
+        }
+        catch (const std::exception& e) {
+            noteError(where, e);
+        }
+        catch (...) {
+            noteError(where);
+        }
+    }
+
+    /** Never throws; does nothing once the socket is closed. */
     void send(const std::string& identity, const protocol::Message& message)
     {
-        auto frames = protocol::encode(message);
-        frames.insert(frames.begin(), identity);
-        zmqutil::sendFrames(*socket, frames);
+        if (!socket) return;
+        guarded("send", [&] {
+            auto frames = protocol::encode(message);
+            frames.insert(frames.begin(), identity);
+            zmqutil::sendFrames(*socket, frames);
+        });
+    }
+
+    /** auction->finish() runs the exchange's callback, which may throw. */
+    void finishQuietly(Auction& auction)
+    {
+        guarded("auction finish", [&] { auction.finish(); });
     }
 
     void sendError(const std::string& identity, const std::string& reason,
@@ -152,6 +210,7 @@ struct Router::Impl {
             {mailbox.socket().handle(), 0, ZMQ_POLLIN, 0},
         };
 
+        bool terminated = false;
         while (!token.stop_requested()) {
             auto now = Clock::now();
             auto wakeAt = nextHousekeeping;
@@ -159,19 +218,51 @@ struct Router::Impl {
             auto wait = std::chrono::ceil<std::chrono::milliseconds>(wakeAt - now);
             if (wait < std::chrono::milliseconds(0)) wait = std::chrono::milliseconds(0);
 
-            zmq::poll(items, 2, wait);
+            try {
+                zmq::poll(items, 2, wait);
+            }
+            catch (const zmq::error_t& e) {
+                if (e.num() == ETERM) break;   // the context is gone: nothing left to serve
+                noteError("poll", e);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                items[0].revents = items[1].revents = 0;
+            }
+            catch (const std::exception& e) {
+                noteError("poll", e);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                items[0].revents = items[1].revents = 0;
+            }
 
             if (items[1].revents & ZMQ_POLLIN) mailbox.drain();
             if (items[0].revents & ZMQ_POLLIN) {
                 std::vector<std::string> frames;
-                for (int i = 0; i < 256 && zmqutil::recvFrames(*socket, frames); ++i)
+                for (int i = 0; i < 256; ++i) {
+                    bool got = false;
+                    try {
+                        got = zmqutil::recvFrames(*socket, frames);
+                    }
+                    catch (const zmq::error_t& e) {
+                        if (e.num() == ETERM) { terminated = true; break; }
+                        noteError("receive", e);
+                        // Back off: a socket that keeps failing must not spin the loop.
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                        break;
+                    }
+                    catch (const std::exception& e) {
+                        noteError("receive", e);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                        break;
+                    }
+                    if (!got) break;
                     handleFrames(frames);
+                }
+                if (terminated) break;
             }
 
             now = Clock::now();
             expireAuctions(now);
             if (now >= nextHousekeeping) {
-                housekeeping(now);
+                guarded("housekeeping", [&] { housekeeping(now); });
                 nextHousekeeping = now + housekeepingInterval;
             }
         }
@@ -182,11 +273,22 @@ struct Router::Impl {
         std::vector<std::string> keys;
         for (const auto& entry : auctions) keys.push_back(entry.first);
         for (const auto& key : keys) finishAuction(key);
+
+        // Nothing may use the agent tables once the loop is gone.
+        agents.clear();
+        identityToName.clear();
+        expiries.clear();
+        stats.agents = 0;
     }
 
     /************************ agent messages ************************/
 
     void handleFrames(const std::vector<std::string>& frames)
+    {
+        guarded("handleFrames", [&] { handleFramesImpl(frames); });
+    }
+
+    void handleFramesImpl(const std::vector<std::string>& frames)
     {
         if (frames.size() < 2) return;
         const std::string& identity = frames[0];
@@ -228,15 +330,15 @@ struct Router::Impl {
         auto config = std::make_shared<AgentConfig>(std::move(msg.config));
         config->name = msg.agent;
 
-        bool compatible = exchanges.empty();
-        for (const auto& exchange : exchanges)
-            if (exchange->prepareConfig(*config)) compatible = true;
-        if (!compatible) {
-            sendError(identity, "config is not compatible with any exchange");
-            return;
-        }
-
         try {
+            bool compatible = exchanges.empty();
+            for (const auto& exchange : exchanges)
+                if (exchange->prepareConfig(*config)) compatible = true;
+            if (!compatible) {
+                sendError(identity, "config is not compatible with any exchange");
+                return;
+            }
+
             pool.addConfig(msg.agent, config);
         }
         catch (const std::exception& e) {
@@ -299,7 +401,17 @@ struct Router::Impl {
 
     /************************ auctions ************************/
 
+    /** Posted to the loop: whatever goes wrong, the auction ends. */
     void handleAuction(std::shared_ptr<Auction> auction)
+    {
+        guarded("handleAuction", [&] { handleAuctionImpl(auction); });
+        // finish() is idempotent: only an auction the router now owns stays open.
+        auto owned = auctions.find(auction->id().toString());
+        if (owned == auctions.end() || owned->second.auction != auction)
+            finishQuietly(*auction);
+    }
+
+    void handleAuctionImpl(const std::shared_ptr<Auction>& auction)
     {
         ++stats.auctions;
         if (auction->finished()) return;
@@ -381,6 +493,9 @@ struct Router::Impl {
                                 const Participant& participant)
     {
         if (!bid.valid()) return "bid needs spot, creative and a positive price";
+        if (bid.price.currencyCode != kBidCurrency)
+            return "bid currency " + bid.price.currencyStr() + " is not "
+                   + Amount(kBidCurrency, 0).currencyStr();
         if (!bid.account.empty() && !bid.account.hasPrefix(config.account))
             return "account " + bid.account.toString() + " is not under "
                    + config.account.toString();
@@ -447,7 +562,9 @@ struct Router::Impl {
         else {
             bool refused = false;
             for (const Bid& bid : msg.bids) {
-                if (!acceptBid(state, agent, bid)) refused = true;
+                bool accepted = false;
+                guarded("acceptBid", [&] { accepted = acceptBid(state, agent, bid); });
+                if (!accepted) refused = true;
             }
             if (refused) send(identity, protocol::NoBudgetMsg{msg.auctionId});
         }
@@ -479,28 +596,48 @@ struct Router::Impl {
         // Test agents never spend money.
         bool reserved = false;
         if (!config.test) {
-            if (!banker->authorizeBid(response.account, itemId, response.price)) {
+            // A banker that fails (connection lost, bad currency) cannot vouch
+            // for the money: same as a refusal.
+            bool authorized = false;
+            guarded("authorizeBid", [&] {
+                authorized = banker->authorizeBid(response.account, itemId, response.price);
+            });
+            if (!authorized) {
                 ++stats.nobudget;
                 return false;
             }
             reserved = true;
         }
 
-        auto result = state.auction->setResponse(response);
-        if (result == Auction::SetResult::Best || result == Auction::SetResult::Outbid) {
-            ++stats.bids;
-            state.accepted.push_back({std::move(response), itemId, reserved});
-            return true;
+        // From here on the money is reserved: whatever throws, release it.
+        try {
+            auto result = state.auction->setResponse(response);
+            if (result == Auction::SetResult::Best || result == Auction::SetResult::Outbid) {
+                state.accepted.push_back({response, itemId, reserved});
+                ++stats.bids;
+                return true;
+            }
+        }
+        catch (...) {
+            if (reserved)
+                guarded("cancelBid", [&] { banker->cancelBid(response.account, itemId); });
+            throw;
         }
 
         // The auction refused it (bad currency, finished): give the money back.
-        if (reserved) banker->cancelBid(response.account, itemId);
+        if (reserved)
+            guarded("cancelBid", [&] { banker->cancelBid(response.account, itemId); });
         ++stats.invalid;
         send(agent.identity, protocol::InvalidMsg{auction.id(), "bid rejected by auction"});
         return true;
     }
 
     void expireAuctions(TimePoint now)
+    {
+        guarded("expireAuctions", [&] { expireAuctionsImpl(now); });
+    }
+
+    void expireAuctionsImpl(TimePoint now)
     {
         while (!expiries.empty() && expiries.begin()->first <= now) {
             const std::string key = expiries.begin()->second;
@@ -512,6 +649,7 @@ struct Router::Impl {
         }
     }
 
+    /** Always ends with auction->finish(): the exchange is waiting for it. */
     void finishAuction(const std::string& key)
     {
         auto it = auctions.find(key);
@@ -520,6 +658,22 @@ struct Router::Impl {
         auctions.erase(it);
         stats.auctionsInFlight = auctions.size();
 
+        guarded("finishAuction", [&] { settleAuction(state); });
+
+        for (const auto& [name, participant] : state.participants) {
+            auto agentIt = agents.find(name);
+            if (agentIt != agents.end() && agentIt->second.inFlight > 0)
+                --agentIt->second.inFlight;
+        }
+
+        finishQuietly(*state.auction);
+    }
+
+    /** Banker cancels for the losers, loss messages, submission of the winners.
+        Each banker call and the sink are guarded on their own, so one failure
+        does not skip the rest. */
+    void settleAuction(AuctionState& state)
+    {
         Auction& auction = *state.auction;
         const auto systemNow = std::chrono::system_clock::now();
 
@@ -533,7 +687,7 @@ struct Router::Impl {
             if (winner && winner->agent == response.agent) continue;
 
             if (accepted.reserved)
-                banker->cancelBid(response.account, accepted.itemId);
+                guarded("cancelBid", [&] { banker->cancelBid(response.account, accepted.itemId); });
 
             ++stats.outbid;
             auto agentIt = agents.find(response.agent);
@@ -548,9 +702,10 @@ struct Router::Impl {
             }
         }
 
-        if (sink) {
-            for (size_t spot = 0; spot < best.size(); ++spot) {
-                if (!best[spot]) continue;
+        if (!sink) return;
+        for (size_t spot = 0; spot < best.size(); ++spot) {
+            if (!best[spot]) continue;
+            guarded("submitted auction sink", [&] {
                 SubmittedAuctionEvent event;
                 event.auctionId = auction.id();
                 event.adSpotId = auction.request().imp[spot].id;
@@ -558,22 +713,20 @@ struct Router::Impl {
                 event.bid = *best[spot];
                 event.request = auction.requestPtr();
                 sink(event);
-            }
+            });
         }
-
-        for (const auto& [name, participant] : state.participants) {
-            auto agentIt = agents.find(name);
-            if (agentIt != agents.end() && agentIt->second.inFlight > 0)
-                --agentIt->second.inFlight;
-        }
-
-        auction.finish();
     }
 
     /************************ events from post auction ************************/
 
     void forwardWinLoss(const MatchedWinLoss& event)
     {
+        guarded("forwardWinLoss", [&] { forwardWinLossImpl(event); });
+    }
+
+    void forwardWinLossImpl(const MatchedWinLoss& event)
+    {
+        if (stopped) return;
         auto it = agents.find(event.bid.agent);
         if (it == agents.end()) return;
         const AgentState& agent = it->second;
@@ -591,6 +744,12 @@ struct Router::Impl {
 
     void forwardCampaignEvent(const MatchedCampaignEvent& event)
     {
+        guarded("forwardCampaignEvent", [&] { forwardCampaignEventImpl(event); });
+    }
+
+    void forwardCampaignEventImpl(const MatchedCampaignEvent& event)
+    {
+        if (stopped) return;
         auto it = agents.find(event.bid.agent);
         if (it == agents.end()) return;
         ++stats.campaignEvents;
@@ -668,11 +827,13 @@ void Router::injectAuction(std::shared_ptr<Auction> auction)
 
 void Router::onMatchedWinLoss(const MatchedWinLoss& event)
 {
+    if (impl_->stopped) return;
     impl_->mailbox.post([impl = impl_.get(), event] { impl->forwardWinLoss(event); });
 }
 
 void Router::onMatchedCampaignEvent(const MatchedCampaignEvent& event)
 {
+    if (impl_->stopped) return;
     impl_->mailbox.post([impl = impl_.get(), event] { impl->forwardCampaignEvent(event); });
 }
 
@@ -697,7 +858,8 @@ json Router::stats() const
                 {"losses", s.losses.load()},
                 {"campaignEvents", s.campaignEvents.load()},
                 {"agents", s.agents.load()},
-                {"auctionsInFlight", s.auctionsInFlight.load()}};
+                {"auctionsInFlight", s.auctionsInFlight.load()},
+                {"errors", s.errors.load()}};
 }
 
 } // namespace RTBKIT

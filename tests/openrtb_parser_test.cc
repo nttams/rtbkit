@@ -300,6 +300,14 @@ TEST_CASE("openrtb: invalid requests are rejected")
     SECTION("not json") { CHECK_THROWS_AS(parse("{nope"), OpenRtbError); }
     SECTION("not an object") { CHECK_THROWS_AS(parse("[1]"), OpenRtbError); }
     SECTION("no id") { CHECK_THROWS_AS(parse(R"({"imp": [ {"id": "1"} ]})"), OpenRtbError); }
+    SECTION("empty id") { CHECK_THROWS_AS(parse(R"({"id": "", "imp": [ {"id": "1"} ]})"), OpenRtbError); }
+    SECTION("imp without id") { CHECK_THROWS_AS(parse(R"({"id": "x", "imp": [ {"banner": {}} ]})"), OpenRtbError); }
+    SECTION("empty imp id") { CHECK_THROWS_AS(parse(R"({"id": "x", "imp": [ {"id": ""} ]})"), OpenRtbError); }
+    SECTION("duplicate imp id")
+    {
+        CHECK_THROWS_AS(parse(R"({"id": "x", "imp": [ {"id": "1"}, {"id": "1"} ]})"), OpenRtbError);
+        CHECK_THROWS_AS(parse(R"({"id": "x", "imp": [ {"id": 1}, {"id": "1"} ]})"), OpenRtbError);
+    }
     SECTION("no imp") { CHECK_THROWS_AS(parse(R"({"id": "x"})"), OpenRtbError); }
     SECTION("empty imp") { CHECK_THROWS_AS(parse(R"({"id": "x", "imp": []})"), OpenRtbError); }
     SECTION("site and app")

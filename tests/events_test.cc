@@ -95,6 +95,17 @@ TEST_CASE("events: matched win / loss / campaign event")
 
 TEST_CASE("events: banker item id")
 {
-    CHECK(bidItemId(Id("a"), Id("1"), "bidder") == "a:1:bidder");
+    CHECK(bidItemId(Id("a"), Id("1"), "bidder") == "1:a|1:1|bidder");
     CHECK(bidItemId(Id("a"), Id("1"), "x") != bidItemId(Id("a"), Id("1"), "y"));
+}
+
+TEST_CASE("events: item ids and spot keys do not collide on separators")
+{
+    // The old "a:b:c" join gave the same string for both of these.
+    CHECK(bidItemId(Id("a:b"), Id("c"), "x") != bidItemId(Id("a"), Id("b:c"), "x"));
+    CHECK(bidItemId(Id("a|1:b"), Id("c"), "x") != bidItemId(Id("a"), Id("1:b|1:c"), "x"));
+    CHECK(auctionSpotKey(Id("a:b"), Id("c")) != auctionSpotKey(Id("a"), Id("b:c")));
+    CHECK(auctionSpotKey(Id("a"), Id("")) != auctionSpotKey(Id(""), Id("a")));
+    // Agent names are last, so an agent holding separators cannot shift fields.
+    CHECK(bidItemId(Id("a"), Id("b"), "c|d") != bidItemId(Id("a"), Id("b|1:c"), "d"));
 }

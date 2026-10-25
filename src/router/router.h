@@ -76,7 +76,7 @@ public:
 
     /** Thread safe counters: auctions, auctionsSent, noAgents, bids, invalid,
         nobudget, toolate, expired, outbid, wins, losses, campaignEvents,
-        agents, auctionsInFlight. */
+        agents, auctionsInFlight, errors (exceptions caught in the loop). */
     nlohmann::json stats() const;
 
 private:

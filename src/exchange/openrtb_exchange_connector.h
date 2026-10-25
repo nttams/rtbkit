@@ -56,8 +56,9 @@ public:
     struct Stats {
         uint64_t requests = 0;   ///< POST /auctions received
         uint64_t bids = 0;       ///< answered 200
-        uint64_t noBids = 0;     ///< answered 204 (includes timeouts)
+        uint64_t noBids = 0;     ///< answered 204 (includes timeouts and expiredInQueue)
         uint64_t timeouts = 0;   ///< 204 because the auction did not finish in time
+        uint64_t expiredInQueue = 0; ///< 204 at once: waited in the HTTP queue past its tmax
         uint64_t badRequests = 0;///< answered 400
         uint64_t errors = 0;     ///< answered 500
     };
@@ -70,7 +71,8 @@ public:
     const std::string& winNoticeUrl() const { return winNoticeUrl_; }
 
 private:
-    void handleAuction(const std::string& body, std::string& responseBody, int& status);
+    void handleAuction(const std::string& body, std::string& responseBody, int& status,
+                       double queueWaitMs = 0);
 
     std::string host_ = "127.0.0.1";
     int configuredPort_ = 12350;
@@ -84,7 +86,7 @@ private:
     std::thread thread_;
 
     std::atomic<uint64_t> requests_{0}, bids_{0}, noBids_{0}, timeouts_{0},
-                          badRequests_{0}, errors_{0};
+                          expiredInQueue_{0}, badRequests_{0}, errors_{0};
 };
 
 } // namespace RTBKIT

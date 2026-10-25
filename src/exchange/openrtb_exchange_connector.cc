@@ -7,7 +7,9 @@
 #include <httplib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <stdexcept>
 
@@ -69,6 +71,44 @@ T setting(const json& config, const char* key, T fallback)
 
 json errorJson(const std::string& message) { return json{{"error", message}}; }
 
+/** Set (on the worker thread) by TimedTaskQueue for the first request of a
+    connection: how long the connection waited for a free worker, measured when
+    the worker picks it up (before any header or body is read, so a client that
+    connects and then idles is not penalised). Negative = nothing to report. */
+thread_local double tlQueueWaitMs = -1;
+
+/** httplib's thread pool, noting when each connection was queued. A request
+    that sat in the queue past its tmax is answered 204 without an auction. */
+class TimedTaskQueue final : public httplib::TaskQueue {
+public:
+    explicit TimedTaskQueue(size_t threads) : pool_(threads) {}
+
+    bool enqueue(std::function<void()> fn) override
+    {
+        return pool_.enqueue([queuedAt = std::chrono::steady_clock::now(),
+                              fn = std::move(fn)] {
+            tlQueueWaitMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - queuedAt).count();
+            fn();
+            tlQueueWaitMs = -1;
+        });
+    }
+
+    void shutdown() override { pool_.shutdown(); }
+
+private:
+    httplib::ThreadPool pool_;
+};
+
+/** Queue wait of the request being handled; only the first request of a
+    connection ever waited in the queue (later ones reuse the worker). */
+double takeQueueWaitMs()
+{
+    const double wait = std::max(0.0, tlQueueWaitMs);
+    tlQueueWaitMs = -1;
+    return wait;
+}
+
 struct Waiter {
     std::mutex mutex;
     std::condition_variable cv;
@@ -120,12 +160,12 @@ void OpenRtbExchangeConnector::start()
     if (server_) return;
 
     auto server = std::make_unique<httplib::Server>();
-    server->new_task_queue = [n = size_t(threads_)] { return new httplib::ThreadPool(n); };
+    server->new_task_queue = [n = size_t(threads_)] { return new TimedTaskQueue(n); };
 
     server->Post("/auctions", [this](const httplib::Request& req, httplib::Response& res) {
         std::string body;
         int status = 500;
-        handleAuction(req.body, body, status);
+        handleAuction(req.body, body, status, takeQueueWaitMs());
         res.status = status;
         if (status != 204) res.set_content(body, "application/json");
     });
@@ -162,6 +202,7 @@ OpenRtbExchangeConnector::Stats OpenRtbExchangeConnector::stats() const
     s.bids = bids_;
     s.noBids = noBids_;
     s.timeouts = timeouts_;
+    s.expiredInQueue = expiredInQueue_;
     s.badRequests = badRequests_;
     s.errors = errors_;
     return s;
@@ -176,7 +217,8 @@ std::shared_ptr<void> OpenRtbExchangeConnector::getCreativeProviderData(
 }
 
 void OpenRtbExchangeConnector::handleAuction(const std::string& body,
-                                             std::string& responseBody, int& status)
+                                             std::string& responseBody, int& status,
+                                             double queueWaitMs)
 {
     ++requests_;
 
@@ -191,6 +233,15 @@ void OpenRtbExchangeConnector::handleAuction(const std::string& body,
         ++badRequests_;
         status = 400;
         responseBody = errorJson(e.what()).dump();
+        return;
+    }
+
+    // The exchange started its clock when it sent the request: if we only got
+    // to it after tmax, nobody is waiting for the answer any more.
+    if (queueWaitMs >= request->timeAvailableMs) {
+        ++expiredInQueue_;
+        ++noBids_;
+        status = 204;
         return;
     }
     if (request->timestamp == Date()) request->timestamp = std::chrono::system_clock::now();

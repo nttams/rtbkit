@@ -83,7 +83,12 @@ public:
             std::lock_guard lock(mutex_);
             tasks.swap(tasks_);
         }
-        for (auto& task : tasks) task();
+        // Tasks guard themselves; this keeps one stray throw from dropping the
+        // rest of the batch (auctions queued behind it would never finish).
+        for (auto& task : tasks) {
+            try { task(); }
+            catch (...) {}
+        }
     }
 
 private:

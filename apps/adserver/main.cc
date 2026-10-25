@@ -7,8 +7,9 @@
 //   adserver [--config file.json] [--port N] [--stats-interval SECONDS]
 //   config: {"adserver": {"port": 12360, "host": "127.0.0.1", "threads": 8},
 //            "postAuction": {"earlyWinTimeoutMs": 10000,
-//                            "finishedWindowMs": 3600000,
-//                            "lostWindowMs": 3600000, "tickIntervalMs": 100},
+//                            "finishedWindowMs": 600000,
+//                            "lostWindowMs": 600000, "tickIntervalMs": 100,
+//                            "maxEntries": 1000000},
 //            "statsIntervalSeconds": 5}
 // SIGINT / SIGTERM stop it cleanly.
 
@@ -42,6 +43,7 @@ PostAuctionService::Options readOptions(const nlohmann::json& j)
     read("finishedWindowMs", options.finishedWindow);
     read("lostWindowMs", options.lostWindow);
     read("tickIntervalMs", options.tickInterval);
+    if (j.contains("maxEntries")) options.maxEntries = j.at("maxEntries").get<size_t>();
     return options;
 }
 

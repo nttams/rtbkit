@@ -266,6 +266,25 @@ TEST_CASE("integration: no win notice means LOSS after the timeout and nothing i
     CHECK(stack.server.statsJson()["postAuction"]["lateWins"] == 1);
 }
 
+TEST_CASE("integration: stopping the server releases the bids still in flight")
+{
+    Stack stack(richAccounts, 60000);   // loss timeout far away
+    Bidder high("high", "t:rich", 3.0, stack.server.agentEndpoint());
+    Bidder low("low", "t:other", 1.5, stack.server.agentEndpoint());
+
+    auto result = stack.request();
+    REQUIRE(result.status == 200);
+    CHECK(stack.inFlight("t:rich") == USD_CPM(3.0));
+    CHECK(stack.server.postAuction().numSubmitted() == 1);
+
+    stack.server.stop();
+    CHECK(stack.inFlight("t:rich").isZero());
+    CHECK(stack.inFlight("t:other").isZero());
+    CHECK(stack.spent("t:rich").isZero());
+    CHECK(stack.server.postAuction().numSubmitted() == 0);
+    CHECK(stack.server.statsJson()["postAuction"]["flushed"] == 1);
+}
+
 TEST_CASE("integration: NOBUDGET when the budget is used up, and a settled bid frees room")
 {
     // 4000 micro USD: two 1.5 CPM bids (1500 micro USD each) fit, a third does not.

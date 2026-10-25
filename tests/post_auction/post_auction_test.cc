@@ -134,7 +134,7 @@ TEST_CASE("post auction: win matches the submission and charges the banker")
     REQUIRE(f.banker->calls().size() == 1);
     CHECK(f.banker->calls()[0].what == "win");
     CHECK(f.banker->calls()[0].account == "campaign:strategy");
-    CHECK(f.banker->calls()[0].item == "a1:1:agent1");
+    CHECK(f.banker->calls()[0].item == bidItemId(Id("a1"), Id(uint64_t(1)), "agent1"));
     CHECK(f.banker->calls()[0].paid == USD_CPM(1.5));
 
     REQUIRE(f.results.size() == 1);
@@ -202,7 +202,7 @@ TEST_CASE("post auction: loss timeout cancels the bid")
     CHECK(f.results[0].winPrice.isZero());
     REQUIRE(f.banker->calls().size() == 1);
     CHECK(f.banker->calls()[0].what == "cancel");
-    CHECK(f.banker->calls()[0].item == "a1:1:agent1");
+    CHECK(f.banker->calls()[0].item == bidItemId(Id("a1"), Id(uint64_t(1)), "agent1"));
     CHECK(f.service.numSubmitted() == 1);
     CHECK(f.service.statsJson()["losses"] == 1);
 
@@ -358,6 +358,190 @@ TEST_CASE("post auction: a throwing banker is counted, not propagated")
     CHECK_NOTHROW(service.onWin(win(1.0)));
     CHECK(wins == 1);
     CHECK(service.statsJson()["bankerErrors"] == 1);
+}
+
+TEST_CASE("post auction: the charged price never exceeds the bid price")
+{
+    SECTION("normal win")
+    {
+        Fixture f;
+        f.service.onSubmittedAuction(submission());   // bid 2.0 CPM
+        f.service.onWin(win(1e9));
+        REQUIRE(f.banker->calls().size() == 1);
+        CHECK(f.banker->calls()[0].what == "win");
+        CHECK(f.banker->calls()[0].paid == USD_CPM(2.0));
+        REQUIRE(f.results.size() == 1);
+        CHECK(f.results[0].winPrice == USD_CPM(2.0));
+        CHECK(f.service.statsJson()["clamped"] == 1);
+    }
+    SECTION("win before the submission")
+    {
+        Fixture f;
+        f.service.onWin(win(1e9));
+        f.service.onSubmittedAuction(submission());
+        REQUIRE(f.banker->calls().size() == 1);
+        CHECK(f.banker->calls()[0].paid == USD_CPM(2.0));
+        CHECK(f.service.statsJson()["clamped"] == 1);
+    }
+    SECTION("late win")
+    {
+        Fixture f;
+        f.service.onSubmittedAuction(submission("a1", 1, now() - 1s));
+        f.service.tick(now());
+        f.service.onWin(win(1e9));
+        REQUIRE(f.banker->calls().size() == 2);
+        CHECK(f.banker->calls()[1].what == "forceWin");
+        CHECK(f.banker->calls()[1].paid == USD_CPM(2.0));
+        CHECK(f.service.statsJson()["clamped"] == 1);
+    }
+    SECTION("a price at or below the bid is untouched")
+    {
+        Fixture f;
+        f.service.onSubmittedAuction(submission());
+        f.service.onWin(win(2.0));
+        CHECK(f.banker->calls()[0].paid == USD_CPM(2.0));
+        CHECK(f.service.statsJson()["clamped"] == 0);
+    }
+    SECTION("a foreign currency price is not trusted")
+    {
+        Fixture f;
+        f.service.onSubmittedAuction(submission());
+        PostAuctionEvent e = win(1.0);
+        e.winPrice = EUR_CPM(1.0);
+        CHECK_NOTHROW(f.service.onWin(e));
+        REQUIRE(f.banker->calls().size() == 1);
+        CHECK(f.banker->calls()[0].paid == USD_CPM(2.0));
+        CHECK(f.service.statsJson()["clamped"] == 1);
+    }
+}
+
+TEST_CASE("post auction: ids holding separators do not collide")
+{
+    Fixture f;
+    f.service.onSubmittedAuction(submission("a:b", 0));
+    SubmittedAuctionEvent other = submission("a", 0);
+    other.adSpotId = Id("b:0");
+    f.service.onSubmittedAuction(other);
+    // Both are waiting: the old "auction:spot" key made them one entry.
+    CHECK(f.service.numSubmitted() == 2);
+
+    PostAuctionEvent w = win(1.0, "a:b", 0);
+    f.service.onWin(w);
+    REQUIRE(f.results.size() == 1);
+    CHECK(f.results[0].auctionId == Id("a:b"));
+    CHECK(f.service.numSubmitted() == 1);
+}
+
+TEST_CASE("post auction: finished and lost bids drop the agent config")
+{
+    Fixture f;
+    auto config = std::make_shared<AgentConfig>();
+    std::weak_ptr<const AgentConfig> weak = config;
+    SubmittedAuctionEvent e = submission();
+    e.bid.config = config;
+    config.reset();
+    f.service.onSubmittedAuction(e);
+    f.service.onWin(win(1.0));
+    e.bid.config.reset();
+    CHECK(weak.expired());
+    f.service.onEvent(campaignEvent(CampaignEventType::CLICK));
+    REQUIRE(f.campaign.size() == 1);
+    CHECK_FALSE(f.campaign[0].bid.config);
+    CHECK(f.campaign[0].bid.agent == "agent1");
+    CHECK(f.campaign[0].bid.bidData == "data-agent1");
+}
+
+TEST_CASE("post auction: the table caps evict the oldest entries")
+{
+    PostAuctionService::Options options;
+    options.maxEntries = 3;
+    Fixture f(options);
+    for (uint64_t spot = 0; spot < 5; ++spot) {
+        f.service.onSubmittedAuction(submission("a1", spot));
+        f.service.onWin(win(1.0, "a1", spot));
+    }
+    auto stats = f.service.statsJson();
+    CHECK(stats["finished"] == 3);
+    CHECK(stats["evicted"] == 2);
+
+    // Spots 0 and 1 are gone, 2..4 still match campaign events.
+    for (uint64_t spot = 0; spot < 5; ++spot) {
+        PostAuctionEvent click = campaignEvent(CampaignEventType::CLICK);
+        click.adSpotId = Id(spot);
+        f.service.onCampaignEvent(click);
+    }
+    CHECK(f.campaign.size() == 3);
+    CHECK(f.campaign[0].adSpotId == Id(uint64_t(2)));
+    CHECK(f.service.numUnmatched() == 2);
+
+    SECTION("lost table")
+    {
+        PostAuctionService::Options lostOptions;
+        lostOptions.maxEntries = 2;
+        Fixture g(lostOptions);
+        for (uint64_t spot = 0; spot < 4; ++spot) {
+            g.service.onSubmittedAuction(submission("a1", spot));
+            g.service.onLoss(event(PostAuctionEventType::LOSS, "a1", spot));
+        }
+        CHECK(g.service.statsJson()["lost"] == 2);
+        CHECK(g.service.statsJson()["evicted"] == 2);
+        // A late win on an evicted loss is unmatched, on a kept one it is LATE_WIN.
+        g.service.onWin(win(1.0, "a1", 0));
+        g.service.onWin(win(1.0, "a1", 3));
+        CHECK(g.service.statsJson()["lateWins"] == 1);
+    }
+}
+
+TEST_CASE("post auction: tick drops only the expired front of each table")
+{
+    PostAuctionService::Options options;
+    options.finishedWindow = 400ms;
+    options.lostWindow = 400ms;
+    options.earlyWinTimeout = 400ms;
+    Fixture f(options);
+
+    auto addAll = [&](uint64_t spot) {
+        f.service.onSubmittedAuction(submission("a1", spot));
+        f.service.onWin(win(1.0, "a1", spot));                 // finished
+        f.service.onSubmittedAuction(submission("l1", spot));
+        f.service.onLoss(event(PostAuctionEventType::LOSS, "l1", spot));   // lost
+        f.service.onWin(win(1.0, "e1", spot));                 // early win
+    };
+    addAll(0);
+    std::this_thread::sleep_for(200ms);
+    addAll(1);
+
+    // 300 ms from now: the first batch (400 ms window) is over, the second is not.
+    f.service.tick(now() + 300ms);
+    auto stats = f.service.statsJson();
+    CHECK(stats["finished"] == 1);
+    CHECK(stats["lost"] == 1);
+    CHECK(stats["earlyWins"] == 1);
+    CHECK(stats["unmatched"] == 1);
+
+    f.service.tick(now() + 1s);
+    stats = f.service.statsJson();
+    CHECK(stats["finished"] == 0);
+    CHECK(stats["lost"] == 0);
+    CHECK(stats["earlyWins"] == 0);
+}
+
+TEST_CASE("post auction: flushPending cancels every waiting reservation")
+{
+    Fixture f;
+    f.service.onSubmittedAuction(submission("a1", 1));
+    f.service.onSubmittedAuction(submission("a2", 1));
+    f.service.onWin(win(1.0, "early", 1));
+    f.service.flushPending();
+
+    CHECK(f.service.numSubmitted() == 0);
+    auto calls = f.banker->calls();
+    REQUIRE(calls.size() == 2);
+    CHECK(calls[0].what == "cancel");
+    CHECK(calls[1].what == "cancel");
+    CHECK(f.service.statsJson()["flushed"] == 2);
+    CHECK(f.service.statsJson()["earlyWins"] == 0);
+    CHECK(f.results.empty());   // no handler calls on shutdown
 }
 
 TEST_CASE("post auction: timer thread turns timeouts into losses")

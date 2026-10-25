@@ -8,6 +8,12 @@
 
 #include <httplib.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -296,6 +302,73 @@ TEST_CASE("openrtb exchange connector: a router that never finishes is cut after
     CHECK(seen->setResponse(bid(config, 0, 1.0)) == Auction::SetResult::Finished);
     CHECK(f.connector.stats().timeouts == 1);
     CHECK(f.connector.stats().noBids == 1);
+}
+
+TEST_CASE("openrtb exchange connector: a request that waited in the queue past its tmax is a 204 without an auction")
+{
+    Fixture f({{"threads", 1}, {"graceMs", 20}});
+    std::atomic<int> handled{0};
+    std::atomic<bool> firstInHandler{false};
+    f.connector.setAuctionHandler([&](std::shared_ptr<Auction> auction) {
+        ++handled;
+        firstInHandler = true;
+        // Keeps the only worker busy for longer than the second tmax.
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        auction->finish();
+    });
+    f.start();
+
+    std::thread first([&] { f.post(requestBody(1000, "first")); });
+    while (!firstInHandler) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    auto res = f.post(requestBody(50, "second"));
+    first.join();
+    REQUIRE(res);
+    CHECK(res->status == 204);
+    CHECK(handled == 1);   // no auction was made for the second request
+    CHECK(f.connector.stats().expiredInQueue == 1);
+    CHECK(f.connector.stats().requests == 2);
+    CHECK(f.connector.stats().noBids == 2);
+
+    // A request that does not wait is handled normally.
+    CHECK(f.post(requestBody(1000, "third"))->status == 204);
+    CHECK(handled == 2);
+    CHECK(f.connector.stats().expiredInQueue == 1);
+}
+
+TEST_CASE("openrtb exchange connector: a connection that idles before its first request is not expired")
+{
+    Fixture f({{"graceMs", 20}});
+    std::atomic<int> handled{0};
+    f.connector.setAuctionHandler([&](std::shared_ptr<Auction> auction) {
+        ++handled;
+        auction->finish();
+    });
+    f.start();
+
+    // Connect now, send the request only after longer than its tmax.
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    REQUIRE(fd >= 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(uint16_t(f.connector.port()));
+    ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    REQUIRE(::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    const std::string body = requestBody(50, "idle");
+    const std::string http = "POST /auctions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                             "Connection: close\r\nContent-Length: " + std::to_string(body.size())
+                             + "\r\n\r\n" + body;
+    REQUIRE(::send(fd, http.data(), http.size(), 0) == ssize_t(http.size()));
+    char buffer[1024];
+    std::string reply;
+    for (ssize_t n; (n = ::recv(fd, buffer, sizeof buffer, 0)) > 0;) reply.append(buffer, size_t(n));
+    ::close(fd);
+
+    CHECK(reply.rfind("HTTP/1.1 204", 0) == 0);
+    CHECK(handled == 1);   // a real auction was made
+    CHECK(f.connector.stats().expiredInQueue == 0);
 }
 
 TEST_CASE("openrtb exchange connector: tmax is capped by maxTmaxMs")

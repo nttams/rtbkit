@@ -11,7 +11,7 @@ namespace {
 /** Table key: win notices carry only auction and spot (one winner per spot). */
 std::string key(const Id& auctionId, const Id& adSpotId)
 {
-    return auctionId.toString() + ":" + adSpotId.toString();
+    return auctionSpotKey(auctionId, adSpotId);
 }
 
 Date orNow(Date when)
@@ -27,7 +27,8 @@ PostAuctionService::PostAuctionService(std::shared_ptr<Banker> banker)
 }
 
 PostAuctionService::PostAuctionService(std::shared_ptr<Banker> banker, Options options)
-    : banker_(std::move(banker)), options_(options)
+    : banker_(std::move(banker)), options_(options), earlyWins_(options.maxEntries),
+      finished_(options.maxEntries), lost_(options.maxEntries)
 {
 }
 
@@ -44,6 +45,23 @@ void PostAuctionService::setWinLossHandler(WinLossHandler handler)
 void PostAuctionService::setCampaignEventHandler(CampaignEventHandler handler)
 {
     campaignEventHandler_ = std::move(handler);
+}
+
+Response PostAuctionService::compact(Response bid)
+{
+    bid.config.reset();
+    return bid;
+}
+
+Amount PostAuctionService::chargedPrice(const Response& bid, const Amount& winPrice)
+{
+    Amount charged = winPrice;
+    if (!winPrice.currencyIsCompatible(bid.price) || winPrice.isNegative())
+        charged = winPrice.isNegative() ? Amount() : bid.price;
+    else if (winPrice > bid.price)
+        charged = bid.price;
+    if (charged != winPrice) ++counters_.clamped;
+    return charged;
 }
 
 void PostAuctionService::bankerCall(const std::function<void()>& call)
@@ -108,15 +126,16 @@ void PostAuctionService::onSubmittedAuction(const SubmittedAuctionEvent& event)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         ++counters_.submitted;
-        auto early = earlyWins_.find(item);
-        if (early == earlyWins_.end()) {
+        auto* early = earlyWins_.find(item);
+        if (!early) {
             submitted_[item] = Pending{event};
             return;
         }
-        Settled settled{event.bid, orNow(early->second.event.timestamp),
-                        early->second.event.winPrice, now + options_.finishedWindow};
-        earlyWins_.erase(early);
-        finished_[item] = settled;
+        Settled settled{compact(event.bid), orNow(early->event.timestamp),
+                        chargedPrice(event.bid, early->event.winPrice),
+                        now + options_.finishedWindow};
+        earlyWins_.erase(item);
+        counters_.evicted += finished_.insert(item, settled);
         ++counters_.wins;
         won = std::move(settled);
     }
@@ -133,31 +152,34 @@ void PostAuctionService::onWin(const PostAuctionEvent& event)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (auto it = submitted_.find(item); it != submitted_.end()) {
-            won = Settled{it->second.event.bid, orNow(event.timestamp), event.winPrice,
+            won = Settled{compact(it->second.event.bid), orNow(event.timestamp),
+                          chargedPrice(it->second.event.bid, event.winPrice),
                           now + options_.finishedWindow};
             submitted_.erase(it);
             ++counters_.wins;
         }
-        else if (finished_.count(item)) {
+        else if (finished_.contains(item)) {
             ++counters_.duplicateWins;
             return;
         }
-        else if (auto lostIt = lost_.find(item); lostIt != lost_.end()) {
-            won = Settled{lostIt->second.bid, orNow(event.timestamp), event.winPrice,
+        else if (auto* lostBid = lost_.find(item)) {
+            won = Settled{lostBid->bid, orNow(event.timestamp),
+                          chargedPrice(lostBid->bid, event.winPrice),
                           now + options_.finishedWindow};
-            lost_.erase(lostIt);
+            lost_.erase(item);
             type = MatchedWinLoss::Type::LATE_WIN;
             ++counters_.lateWins;
         }
-        else if (earlyWins_.count(item)) {
+        else if (earlyWins_.contains(item)) {
             ++counters_.duplicateWins;
             return;
         }
         else {
-            earlyWins_[item] = EarlyWin{event, now + options_.earlyWinTimeout};
+            counters_.evicted += earlyWins_.insert(
+                item, EarlyWin{event, now + options_.earlyWinTimeout});
             return;
         }
-        finished_[item] = won;
+        counters_.evicted += finished_.insert(item, won);
     }
     finishWin(event.auctionId, event.adSpotId, won, type);
 }
@@ -173,13 +195,13 @@ void PostAuctionService::onLoss(const PostAuctionEvent& event)
         auto it = submitted_.find(item);
         if (it == submitted_.end()) {
             // A repeated loss for a bid we already settled is not an error.
-            if (!finished_.count(item) && !lost_.count(item)) ++counters_.unmatched;
+            if (!finished_.contains(item) && !lost_.contains(item)) ++counters_.unmatched;
             return;
         }
-        lost = Settled{it->second.event.bid, orNow(event.timestamp), Amount(),
+        lost = Settled{compact(it->second.event.bid), orNow(event.timestamp), Amount(),
                        now + options_.lostWindow};
         submitted_.erase(it);
-        lost_[item] = lost;
+        counters_.evicted += lost_.insert(item, lost);
         ++counters_.losses;
     }
     finishLoss(event.auctionId, event.adSpotId, lost);
@@ -192,12 +214,12 @@ void PostAuctionService::onCampaignEvent(const PostAuctionEvent& event)
     MatchedCampaignEvent matched;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto it = finished_.find(item);
-        if (it == finished_.end()) {
+        auto* won = finished_.find(item);
+        if (!won) {
             ++counters_.unmatched;
             return;
         }
-        matched.bid = it->second.bid;
+        matched.bid = won->bid;
         ++counters_.campaignEvents;
     }
     matched.event = event.campaignEvent;
@@ -231,21 +253,15 @@ void PostAuctionService::tick(Date now)
                 ++it;
                 continue;
             }
-            Settled lost{e.bid, now, Amount(), now + options_.lostWindow};
-            lost_[it->first] = lost;
+            Settled lost{compact(e.bid), now, Amount(), now + options_.lostWindow};
+            counters_.evicted += lost_.insert(it->first, lost);
             timeouts.push_back({e.auctionId, e.adSpotId, std::move(lost)});
             ++counters_.losses;
             it = submitted_.erase(it);
         }
-        for (auto it = earlyWins_.begin(); it != earlyWins_.end();) {
-            if (it->second.expiry < now) {
-                ++counters_.unmatched;
-                it = earlyWins_.erase(it);
-            }
-            else ++it;
-        }
-        std::erase_if(finished_, [&](const auto& kv) { return kv.second.expiry < now; });
-        std::erase_if(lost_, [&](const auto& kv) { return kv.second.expiry < now; });
+        counters_.unmatched += earlyWins_.popExpired(now);
+        finished_.popExpired(now);
+        lost_.popExpired(now);
     }
     for (const Timeout& t : timeouts) finishLoss(t.auctionId, t.adSpotId, t.lost);
 }
@@ -281,6 +297,22 @@ void PostAuctionService::stop()
     if (timer.joinable()) timer.join();
 }
 
+void PostAuctionService::flushPending()
+{
+    std::vector<SubmittedAuctionEvent> pending;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& [item, entry] : submitted_) pending.push_back(std::move(entry.event));
+        submitted_.clear();
+        counters_.flushed += pending.size();
+        earlyWins_.popExpired(Date::max());
+    }
+    for (const auto& e : pending) {
+        const std::string item = bidItemId(e.auctionId, e.adSpotId, e.bid.agent);
+        bankerCall([&] { banker_->cancelBid(e.bid.account, item); });
+    }
+}
+
 size_t PostAuctionService::numSubmitted() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -306,7 +338,11 @@ nlohmann::json PostAuctionService::statsJson() const
         {"unmatched", counters_.unmatched},
         {"campaignEvents", counters_.campaignEvents},
         {"bankerErrors", counters_.bankerErrors},
+        {"clamped", counters_.clamped},
+        {"evicted", counters_.evicted},
+        {"flushed", counters_.flushed},
         {"finished", finished_.size()},
+        {"lost", lost_.size()},
         {"earlyWins", earlyWins_.size()},
     };
 }

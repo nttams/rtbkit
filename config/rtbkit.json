@@ -20,9 +20,10 @@
     },
     "postAuction": {
         "earlyWinTimeoutMs": 10000,
-        "finishedWindowMs": 3600000,
-        "lostWindowMs": 3600000,
-        "tickIntervalMs": 100
+        "finishedWindowMs": 600000,
+        "lostWindowMs": 600000,
+        "tickIntervalMs": 100,
+        "maxEntries": 1000000
     },
     "admin": {
         "host": "127.0.0.1",

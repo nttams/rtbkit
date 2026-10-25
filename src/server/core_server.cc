@@ -38,6 +38,12 @@ PostAuctionService::Options postAuctionOptions(const json& j)
     read("finishedWindowMs", options.finishedWindow);
     read("lostWindowMs", options.lostWindow);
     read("tickIntervalMs", options.tickInterval);
+    if (auto it = j.find("maxEntries"); it != j.end()) {
+        if (!it->is_number_unsigned() || it->get<uint64_t>() == 0)
+            throw std::runtime_error(
+                "core server: postAuction.maxEntries must be a positive integer");
+        options.maxEntries = it->get<size_t>();
+    }
     return options;
 }
 
@@ -139,7 +145,11 @@ void CoreServer::stopAll()
     }
     connector_->stop();
     adServer_->stop();
+    // The router's stop path still submits the winners it holds, so the post
+    // auction service must outlive it; then whatever is still waiting for a
+    // result is released at the banker (it would stay reserved forever).
     router_->stop();
+    postAuction_->flushPending();
     postAuction_->stop();
 }
 
@@ -151,6 +161,7 @@ json CoreServer::statsJson() const
                                {"bids", c.bids},
                                {"noBids", c.noBids},
                                {"timeouts", c.timeouts},
+                               {"expiredInQueue", c.expiredInQueue},
                                {"badRequests", c.badRequests},
                                {"errors", c.errors}}},
                 {"postAuction", postAuction_->statsJson()},

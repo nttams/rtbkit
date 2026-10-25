@@ -101,11 +101,26 @@ TEST_CASE("adserver: win notice reaches the post auction service")
     CHECK(f.results[0].winPrice == USD_CPM(1.5));
     CHECK(f.results[0].winPrice.value == 1500);
     REQUIRE(f.banker->wins.size() == 1);
-    CHECK(f.banker->wins[0].first == "a1:1:agent1");
+    CHECK(f.banker->wins[0].first == bidItemId(Id("a1"), Id(uint64_t(1)), "agent1"));
     CHECK(f.banker->wins[0].second == USD_CPM(1.5));
 
     auto stats = nlohmann::json::parse(c.Get("/stats")->body);
     CHECK(stats["wins"] == 1);
+}
+
+TEST_CASE("adserver: a huge win price charges only the bid price")
+{
+    Fixture f;
+    f.submit();   // bid price 2.0 CPM
+    auto c = f.client();
+    CHECK(status(c.Get("/win?auctionId=a1&adSpotId=1&price=1000000000")) == 200);
+
+    REQUIRE(f.banker->wins.size() == 1);
+    CHECK(f.banker->wins[0].second == USD_CPM(2.0));
+    REQUIRE(f.results.size() == 1);
+    CHECK(f.results[0].winPrice == USD_CPM(2.0));
+    auto stats = nlohmann::json::parse(c.Get("/stats")->body);
+    CHECK(stats["clamped"] == 1);
 }
 
 TEST_CASE("adserver: win notice before the submission is matched later")

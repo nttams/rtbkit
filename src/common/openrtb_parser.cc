@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cstdint>
+#include <set>
 
 #include <nlohmann/json.hpp>
 
@@ -399,8 +400,14 @@ BidRequest parseOpenRtbBidRequest(const json& req, const OpenRtbOptions& options
         const json* imps = find(req, "imp");
         if (!imps || !imps->is_array() || imps->empty())
             fail("bid request needs a non empty imp array");
-        for (const auto& imp : *imps)
+        std::set<std::string> impIds;
+        for (const auto& imp : *imps) {
             result.imp.push_back(parseImpression(imp, result));
+            const Id& impId = result.imp.back().id;
+            if (impId.empty()) fail("imp needs a non empty id");
+            if (!impIds.insert(impId.toString()).second)
+                fail("duplicate imp id " + impId.toString());
+        }
 
         const json* site = find(req, "site");
         const json* app = find(req, "app");
