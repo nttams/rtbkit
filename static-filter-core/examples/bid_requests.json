@@ -1,0 +1,109 @@
+[
+  {
+    "exchange": "demo",
+    "timestamp": "2024-01-03T10:00:00Z",
+    "url": "https://news.example.com/world/story.html",
+    "language": "en",
+    "location": {
+      "countryCode": "US",
+      "regionCode": "CA",
+      "cityName": "San Francisco",
+      "postalCode": "94105",
+      "dma": 807,
+      "metro": 807
+    },
+    "ipAddress": "203.0.113.9",
+    "userAgent": "Mozilla/5.0 (demo)",
+    "userIds": {
+      "xchg": "user-1234",
+      "prov": "prov-77"
+    },
+    "segments": {
+      "audience": [
+        1,
+        "sports"
+      ]
+    },
+    "device": {
+      "geo": {
+        "lat": 37.78,
+        "lon": -122.41
+      }
+    },
+    "imp": [
+      {
+        "position": "BELOW"
+      }
+    ],
+    "name": "San Francisco, Wednesday, exchange=demo"
+  },
+  {
+    "exchange": "other-exchange",
+    "timestamp": "2024-01-07T03:00:00Z",
+    "url": "https://shop.example.com/cart",
+    "language": "fr",
+    "location": {
+      "countryCode": "CA",
+      "regionCode": "ON",
+      "cityName": "Toronto",
+      "postalCode": "M5V",
+      "dma": -1,
+      "metro": -1
+    },
+    "ipAddress": "203.0.113.9",
+    "userAgent": "Mozilla/5.0 (demo)",
+    "userIds": {},
+    "segments": {
+      "audience": [
+        1
+      ]
+    },
+    "device": {
+      "geo": {
+        "lat": 37.78,
+        "lon": -122.41
+      }
+    },
+    "imp": [
+      {
+        "position": "ABOVE"
+      }
+    ],
+    "name": "Same user without vendor segment and ids, other exchange name"
+  },
+  {
+    "exchange": "demo",
+    "timestamp": "2024-01-03T10:00:00Z",
+    "url": "https://news.example.com/world/story.html",
+    "language": "en",
+    "location": {
+      "countryCode": "US",
+      "regionCode": "CA",
+      "cityName": "San Francisco",
+      "postalCode": "94105",
+      "dma": 807,
+      "metro": 807
+    },
+    "ipAddress": "203.0.113.9",
+    "userAgent": "Mozilla/5.0 (demo)",
+    "userIds": {
+      "xchg": "user-1234",
+      "prov": "prov-77"
+    },
+    "segments": {
+      "audience": [
+        1,
+        "sports"
+      ],
+      "vendor": [
+        5
+      ]
+    },
+    "imp": [
+      {
+        "position": "BELOW"
+      }
+    ],
+    "name": "No device geo"
+  }
+]
