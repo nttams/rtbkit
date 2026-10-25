@@ -73,6 +73,11 @@ inline void parseValue(const nlohmann::json& j, CachedRegex& out)
     }
 }
 
+inline nlohmann::json valueToJson(const std::string& v) { return v; }
+inline nlohmann::json valueToJson(int v) { return v; }
+inline nlohmann::json valueToJson(const DomainMatcher& v) { return v.str; }
+inline nlohmann::json valueToJson(const CachedRegex& v) { return v.str; }
+
 } // namespace detail
 
 template<typename T, typename IE = std::vector<T> >
@@ -81,6 +86,19 @@ struct IncludeExclude {
     IE exclude;
 
     bool empty() const { return include.empty() && exclude.empty(); }
+
+    /** Inverse of fromJson; empty lists are left out. */
+    nlohmann::json toJson() const
+    {
+        nlohmann::json result = nlohmann::json::object();
+        for (const char* key : {"include", "exclude"}) {
+            const IE& list = key[0] == 'i' ? include : exclude;
+            if (list.empty()) continue;
+            auto& out = result[key] = nlohmann::json::array();
+            for (const auto& v : list) out.push_back(detail::valueToJson(v));
+        }
+        return result;
+    }
 
     /** Parses {"include": [...], "exclude": [...]}. Throws
         std::invalid_argument on unknown keys or bad values; `name` is only

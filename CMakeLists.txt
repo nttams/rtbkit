@@ -36,9 +36,12 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(RtbOptions)
 include(RtbDependencies)
 
-add_subdirectory(src)
-
+# CTest first: area test executables are defined inside src/<area>.
 include(CTest)
+
+add_subdirectory(src)
+add_subdirectory(apps)
+
 if(BUILD_TESTING)
-    add_subdirectory(tests)
+    add_subdirectory(tests)   # shared P1 tests (rtb_tests)
 endif()

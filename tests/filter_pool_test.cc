@@ -15,7 +15,7 @@ namespace {
 
 // Exchange connector whose decisions come from the int stored in the
 // provider data (0 means reject).
-struct DemoConnector : public ExchangeConnector
+struct DemoConnector : public ExchangeFilterHooks
 {
     std::string exchangeName() const override { return "demo"; }
 

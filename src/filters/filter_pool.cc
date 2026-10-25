@@ -19,7 +19,7 @@ matchedNames() const
 
 FilterPool::Result
 FilterPool::
-filter(const BidRequest& br, const ExchangeConnector* conn, const ConfigSet& mask) const
+filter(const BidRequest& br, const ExchangeFilterHooks* conn, const ConfigSet& mask) const
 {
     RTB_CHECK(!filters.empty(), "No filters registered");
 

@@ -1,5 +1,5 @@
-// Minimal exchange connector interface used by the filters. The full
-// connector (HTTP, bid response building) arrives with the exchange layer.
+// The part of an exchange connector the filters see. The full connector
+// interface (exchange/exchange_connector.h) derives from it.
 #pragma once
 
 #include <string>
@@ -10,8 +10,8 @@ struct BidRequest;
 struct AgentConfig;
 struct Creative;
 
-struct ExchangeConnector {
-    virtual ~ExchangeConnector() = default;
+struct ExchangeFilterHooks {
+    virtual ~ExchangeFilterHooks() = default;
 
     virtual std::string exchangeName() const = 0;
 

@@ -54,7 +54,7 @@ struct FilterPool
         std::runtime_error when no filter is registered. */
     Result filter(
             const BidRequest& br,
-            const ExchangeConnector* conn,
+            const ExchangeFilterHooks* conn,
             const ConfigSet& mask = ConfigSet(true)) const;
 
     // Filters are kept sorted by priority.

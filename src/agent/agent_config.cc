@@ -490,4 +490,183 @@ AgentConfig AgentConfig::parse(const std::string& jsonText)
     return fromJson(j);
 }
 
+/******************************************************************************/
+/* TO JSON                                                                    */
+/******************************************************************************/
+
+namespace {
+
+template<typename IE>
+void putFilter(json& out, const char* key, const IE& filter)
+{
+    if (!filter.empty()) out[key] = filter.toJson();
+}
+
+template<typename Info>
+json segmentInfoJson(const Info& info)
+{
+    json j = json::object();
+    j["excludeIfNotPresent"] = info.excludeIfNotPresent;
+    j["include"] = info.include.toJson();
+    j["exclude"] = info.exclude.toJson();
+    return j;
+}
+
+template<typename Map>
+json segmentFilterJson(const Map& segments)
+{
+    json j = json::object();
+    for (const auto& [source, info] : segments) j[source] = info.toJson();
+    return j;
+}
+
+// Keys we did not recognise on the way in go back out unchanged.
+void putExtensions(json& out, const json& extensions)
+{
+    if (!extensions.is_object()) return;
+    for (const auto& [key, val] : extensions.items()) out[key] = val;
+}
+
+const char* resultFormatName(BidResultFormat f)
+{
+    switch (f) {
+    case BRF_FULL: return "full";
+    case BRF_LIGHTWEIGHT: return "lightweight";
+    case BRF_NONE: return "none";
+    }
+    return "full";
+}
+
+} // namespace
+
+json Creative::SegmentInfo::toJson() const { return segmentInfoJson(*this); }
+
+json Creative::toJson() const
+{
+    json j = json::object();
+    j["format"] = format.print();
+    j["name"] = name;
+    j["id"] = id;
+    j["type"] = isVideo() ? "video" : "image";
+    if (isVideo()) {
+        j["duration"] = duration;
+        j["bitrate"] = bitrate;
+    }
+    if (!dealId.empty()) j["dealId"] = dealId;
+    if (!providerConfig.is_null()) j["providerConfig"] = providerConfig;
+    putFilter(j, "languageFilter", languageFilter);
+    putFilter(j, "locationFilter", locationFilter);
+    putFilter(j, "exchangeFilter", exchangeFilter);
+    if (!segments.empty()) j["segmentFilter"] = segmentFilterJson(segments);
+    if (!fees.is_null()) j["fees"] = fees;
+    putExtensions(j, extensions);
+    return j;
+}
+
+json LatLonRad::toJson() const
+{
+    return json{{"lat", lat}, {"long", lon}, {"radius", radius}};
+}
+
+json UserPartition::toJson() const
+{
+    static const char* const names[] = {"none", "random", "exchangeId",
+                                        "providerId", "ipua"};
+    json ranges = json::array();
+    for (const auto& r : includeRanges) ranges.push_back(json::array({r.first, r.last}));
+    return json{{"hashOn", names[hashOn]}, {"modulus", modulus},
+                {"includeRanges", ranges}};
+}
+
+json AugmentationConfig::toJson() const
+{
+    json j = json::object();
+    if (!config.is_null()) j["config"] = config;
+    putFilter(j, "filters", filters);
+    j["required"] = required;
+    return j;
+}
+
+json AgentConfig::SegmentInfo::toJson() const
+{
+    json j = segmentInfoJson(*this);
+    putFilter(j, "applyToExchanges", applyToExchanges);
+    return j;
+}
+
+json AgentConfig::HourOfWeekFilter::toJson() const
+{
+    std::string bits(168, '0');
+    for (size_t i = 0; i < 168; ++i) bits[i] = hourBitmap[i] ? '1' : '0';
+    return json{{"hourlyBitmapSundayMidnightUtc", bits}};
+}
+
+json AgentConfig::toJson() const
+{
+    json j = json::object();
+    j["name"] = name;
+    j["account"] = account.toJson();
+    j["externalId"] = externalId;
+    j["external"] = external;
+    j["test"] = test;
+    if (!roundRobinGroup.empty() || roundRobinWeight != 0)
+        j["roundRobin"] = json{{"group", roundRobinGroup},
+                               {"weight", roundRobinWeight}};
+    j["bidProbability"] = bidProbability;
+    j["minTimeAvailableMs"] = minTimeAvailableMs;
+    j["maxInFlight"] = maxInFlight;
+    if (!bidderInterface.empty()) j["bidderInterface"] = bidderInterface;
+    if (!requiredIds.empty()) j["requiredIds"] = requiredIds;
+
+    putFilter(j, "hostFilter", hostFilter);
+    putFilter(j, "urlFilter", urlFilter);
+    putFilter(j, "languageFilter", languageFilter);
+    putFilter(j, "locationFilter", locationFilter);
+    putFilter(j, "exchangeFilter", exchangeFilter);
+    putFilter(j, "foldPositionFilter", foldPositionFilter);
+
+    if (!latLongDevFilter.empty()) {
+        json list = json::array();
+        for (const auto& l : latLongDevFilter.latlonrads) list.push_back(l.toJson());
+        j["latLongDevFilter"] = list;
+    }
+    if (!segments.empty()) j["segmentFilter"] = segmentFilterJson(segments);
+    if (tagFilter.excludeIfNotPresent || !tagFilter.include.empty()
+        || !tagFilter.exclude.empty() || !tagFilter.applyToExchanges.empty())
+        j["tagFilter"] = tagFilter.toJson();
+    if (!hourOfWeekFilter.isDefault()) j["hourOfWeekFilter"] = hourOfWeekFilter.toJson();
+    if (!userPartition.empty()) j["userPartition"] = userPartition.toJson();
+
+    json cr = json::array();
+    for (const auto& c : creatives) cr.push_back(c.toJson());
+    j["creatives"] = cr;
+
+    if (!augmentations.empty()) {
+        json aug = json::object();
+        for (const auto& a : augmentations) aug[a.name] = a.toJson();
+        j["augmentations"] = aug;
+    }
+
+    static const char* const blTypes[] = {"off", "user", "user_site"};
+    j["blacklist"] = json{{"type", blTypes[blacklistType]},
+                          {"time", blacklistTime},
+                          {"scope", blacklistScope == BL_AGENT ? "agent" : "account"}};
+
+    if (!visitChannels.empty() || includeUnmatchedVisits)
+        j["visits"] = json{{"channels", visitChannels.toJson()},
+                           {"includeUnmatched", includeUnmatchedVisits}};
+
+    static const char* const bcTypes[] = {"relay", "relay_fixed", "fixed"};
+    j["bidControl"] = json{{"type", bcTypes[bidControlType]},
+                           {"fixedBidCpmInMicros", fixedBidCpmInMicros}};
+
+    if (!providerConfig.is_null()) j["providerConfig"] = providerConfig;
+    j["winFormat"] = resultFormatName(winFormat);
+    j["lossFormat"] = resultFormatName(lossFormat);
+    j["errorFormat"] = resultFormatName(errorFormat);
+    if (!ext.is_null()) j["ext"] = ext;
+    putExtensions(j, extensions);
+    return j;
+}
+
 } // namespace RTBKIT

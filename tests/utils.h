@@ -3,7 +3,7 @@
 
 #include "agent/agent_config.h"
 #include "common/bid_request.h"
-#include "common/exchange_connector.h"
+#include "common/exchange_filter_hooks.h"
 #include "common/include_exclude.h"
 #include "common/segments.h"
 #include "filters/filter.h"
@@ -23,7 +23,7 @@ namespace Test {
 /* FILTER EXCHANGE CONNECTOR                                                  */
 /******************************************************************************/
 
-struct FilterExchangeConnector : public ExchangeConnector
+struct FilterExchangeConnector : public ExchangeFilterHooks
 {
     FilterExchangeConnector(const std::string& name) : name(name) {}
 

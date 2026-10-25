@@ -4,7 +4,7 @@
 
 #include "common/bid_request.h"
 #include "common/check.h"
-#include "common/exchange_connector.h"
+#include "common/exchange_filter_hooks.h"
 
 #include <bit>
 #include <cstdint>
@@ -342,7 +342,7 @@ struct FilterState
 {
     FilterState(
             const BidRequest& br,
-            const ExchangeConnector* ex,
+            const ExchangeFilterHooks* ex,
             const CreativeMatrix& activeConfigs) :
         request(br),
         exchange(ex),
@@ -351,7 +351,7 @@ struct FilterState
     {}
 
     const BidRequest& request;
-    const ExchangeConnector * const exchange;
+    const ExchangeFilterHooks * const exchange;
 
     // Current set of active configuration.
     const ConfigSet& configs() const { return configs_; }

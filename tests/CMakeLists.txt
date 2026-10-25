@@ -2,8 +2,12 @@ include(Catch)
 
 add_executable(rtb_tests
     agent_config_test.cc
+    agent_config_json_test.cc
+    auction_test.cc
+    bid_request_json_test.cc
     creative_filters_test.cc
     currency_test.cc
+    events_test.cc
     generic_filters_test.cc
     openrtb_parser_test.cc
     static_filters_test.cc

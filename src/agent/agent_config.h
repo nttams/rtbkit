@@ -48,6 +48,7 @@ struct Creative {
 
     /** Throws AgentConfigError. */
     static Creative fromJson(const nlohmann::json& json);
+    nlohmann::json toJson() const;
 
     Format format;
 
@@ -80,6 +81,7 @@ struct Creative {
         SegmentList exclude;
 
         static SegmentInfo fromJson(const nlohmann::json& json);
+        nlohmann::json toJson() const;
     };
 
     std::map<std::string, SegmentInfo> segments;
@@ -112,6 +114,7 @@ struct LatLonRad {
 
     /** {"lat":..,"long":..,"radius":..}. Throws AgentConfigError. */
     static LatLonRad fromJson(const nlohmann::json& json);
+    nlohmann::json toJson() const;
 };
 
 struct LatLonRadList {
@@ -160,6 +163,7 @@ struct UserPartition {
     }
 
     static UserPartition fromJson(const nlohmann::json& json);
+    nlohmann::json toJson() const;
 };
 
 
@@ -177,6 +181,7 @@ struct AugmentationConfig {
 
     static AugmentationConfig fromJson(const nlohmann::json& json,
                                        const std::string& name);
+    nlohmann::json toJson() const;
 };
 
 
@@ -222,6 +227,10 @@ struct AgentConfig {
     static AgentConfig fromJson(const nlohmann::json& json);
     static AgentConfig parse(const std::string& jsonText);
 
+    /** Inverse of fromJson: fromJson(c.toJson()).toJson() == c.toJson().
+        providerData is opaque and not serialized. */
+    nlohmann::json toJson() const;
+
     AccountKey account;   ///< Who to bill this to
 
     uint64_t externalId = 0;  ///< Simplifies id reconciliation with external systems
@@ -257,6 +266,7 @@ struct AgentConfig {
         IncludeExclude<std::string> applyToExchanges;
 
         static SegmentInfo fromJson(const nlohmann::json& json);
+        nlohmann::json toJson() const;
     };
 
     std::map<std::string, SegmentInfo> segments;
@@ -281,6 +291,7 @@ struct AgentConfig {
 
         /** {"hourlyBitmapSundayMidnightUtc": "<168 chars of 0/1>"} */
         static HourOfWeekFilter fromJson(const nlohmann::json& json);
+        nlohmann::json toJson() const;
 
         std::bitset<168> hourBitmap;
     };
