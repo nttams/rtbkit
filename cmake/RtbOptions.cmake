@@ -43,7 +43,7 @@ function(rtb_add_area_tests area)
 endfunction()
 
 # rtb_add_app(<name> SOURCES a.cc ... [DEPS lib ...])
-# Executable placed in build/apps/. Call it from apps/<name>/CMakeLists.txt.
+# Executable placed in build/bin/. Call it from apps/<name>/CMakeLists.txt.
 function(rtb_add_app name)
     cmake_parse_arguments(ARG "" "" "SOURCES;DEPS" ${ARGN})
     add_executable(${name} ${ARG_SOURCES})

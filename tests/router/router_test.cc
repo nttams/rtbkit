@@ -238,9 +238,10 @@ TEST_CASE("router: best of two agents wins and the other is cancelled and told")
     CHECK(events[0].bid.agent == "high");
     CHECK(events[0].lossTimeout > std::chrono::system_clock::now());
 
-    const std::string item = bidItemId(Id("auction-w"), Id(uint64_t(1)));
-    CHECK(env.banker->authorizedItems() == std::set<std::string>{"acct:low|" + item, "acct:high|" + item});
-    CHECK(env.banker->cancelledItems() == std::set<std::string>{"acct:low|" + item});
+    const std::string lowItem = bidItemId(Id("auction-w"), Id(uint64_t(1)), "low");
+    const std::string highItem = bidItemId(Id("auction-w"), Id(uint64_t(1)), "high");
+    CHECK(env.banker->authorizedItems() == std::set<std::string>{"acct:low|" + lowItem, "acct:high|" + highItem});
+    CHECK(env.banker->cancelledItems() == std::set<std::string>{"acct:low|" + lowItem});
 
     REQUIRE(waitUntil([&] { return low->losses == 1; }));
     CHECK(high->losses == 0);
@@ -251,6 +252,23 @@ TEST_CASE("router: best of two agents wins and the other is cancelled and told")
     CHECK(stats["bids"] == 2);
     CHECK(stats["outbid"] == 1);
     CHECK(stats["agents"] == 2);
+}
+
+TEST_CASE("router: agents sharing an account get separate banker items")
+{
+    Env env;
+    auto low = env.addAgent("low", "acct:shared", 2.0);
+    auto high = env.addAgent("high", "acct:shared", 3.0);
+
+    auto run = env.submit("auction-s", 1000);
+    REQUIRE(run.waitDone());
+
+    const std::string lowItem = bidItemId(Id("auction-s"), Id(uint64_t(1)), "low");
+    const std::string highItem = bidItemId(Id("auction-s"), Id(uint64_t(1)), "high");
+    CHECK(env.banker->authorizedItems()
+          == std::set<std::string>{"acct:shared|" + lowItem, "acct:shared|" + highItem});
+    // The loser's reservation is released even though the winner uses the same account.
+    CHECK(env.banker->cancelledItems() == std::set<std::string>{"acct:shared|" + lowItem});
 }
 
 TEST_CASE("router: WIN LOSS and CAMPAIGN_EVENT are forwarded to the named agent")

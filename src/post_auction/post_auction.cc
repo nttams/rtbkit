@@ -8,9 +8,10 @@ namespace RTBKIT {
 
 namespace {
 
+/** Table key: win notices carry only auction and spot (one winner per spot). */
 std::string key(const Id& auctionId, const Id& adSpotId)
 {
-    return bidItemId(auctionId, adSpotId);
+    return auctionId.toString() + ":" + adSpotId.toString();
 }
 
 Date orNow(Date when)
@@ -59,8 +60,8 @@ void PostAuctionService::bankerCall(const std::function<void()>& call)
 void PostAuctionService::finishWin(const Id& auctionId, const Id& adSpotId,
                                    const Settled& won, MatchedWinLoss::Type type)
 {
-    const std::string item = key(auctionId, adSpotId);
     const Response& bid = won.bid;
+    const std::string item = bidItemId(auctionId, adSpotId, bid.agent);
     if (bid.test) {
         bankerCall([&] { banker_->cancelBid(bid.account, item); });
     }
@@ -85,7 +86,7 @@ void PostAuctionService::finishWin(const Id& auctionId, const Id& adSpotId,
 void PostAuctionService::finishLoss(const Id& auctionId, const Id& adSpotId,
                                     const Settled& lost)
 {
-    const std::string item = key(auctionId, adSpotId);
+    const std::string item = bidItemId(auctionId, adSpotId, lost.bid.agent);
     bankerCall([&] { banker_->cancelBid(lost.bid.account, item); });
 
     if (!winLossHandler_) return;

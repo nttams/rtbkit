@@ -80,9 +80,10 @@ Only USD works for now (mixing currencies throws).
 | `agent/protocol.h` | router <-> agent messages, `encode` / `decode` |
 | `banker/banker.h` | `Banker`, `AccountSummary`, `NullBanker` |
 | `exchange/exchange_connector.h` | `ExchangeConnector`, `AuctionHandler` |
-| `router/router.h` | `Router`, `RouterConfig` (sketch) |
-| `post_auction/post_auction.h` | `PostAuctionService` (sketch) |
-| `adserver/adserver.h` | `AdServer` (sketch, HTTP contract in the header) |
+| `router/router.h` | `Router`, `RouterConfig` |
+| `post_auction/post_auction.h` | `PostAuctionService` |
+| `adserver/adserver.h` | `AdServer` (HTTP contract in the header) |
+| `server/core_server.h` | `CoreServer`: banker + router + connector + post auction + ad server + admin, wired |
 
 `ExchangeFilterHooks` (`common/exchange_filter_hooks.h`) is the small part of a
 connector the filters see; `ExchangeConnector` derives from it.
@@ -102,7 +103,9 @@ connector the filters see; `ExchangeConnector` derives from it.
 
 ### Banker rules
 
-Item id is `bidItemId(auctionId, adSpotId)`. Router: `authorizeBid(account,
+Item id is `bidItemId(auctionId, adSpotId, agent)` = `auction:spot:agent`, so two
+agents with the same account never share a reservation. The post auction service
+builds the same id from `Response::agent` of the submitted bid. Router: `authorizeBid(account,
 item, bid price)` when a BID arrives (refused: send `NOBUDGET`, drop the bid).
 After the auction: `cancelBid` for every response that did not win. The winner
 stays reserved until the post auction service settles it (`winBid` with the win
@@ -144,7 +147,8 @@ filters reject the config.
 |---|---|
 | 12340 | router agent endpoint (zmq ROUTER) |
 | 12350 | exchange connector (OpenRTB HTTP `POST /auctions`) |
-| 12360 | ad server (`/win`, `/impression`, `/click`) |
+| 12360 | ad server (`/win`, `/impression`, `/click`, `/stats`) |
+| 12370 | admin HTTP of `rtbkit_router` (`GET /stats`: router, connector, post auction, banker JSON) |
 
 ### Win notice URL
 
@@ -152,6 +156,26 @@ The connector puts `nurl = <winNoticeUrl>?auctionId=<id>&adSpotId=<imp id>&price
 in the OpenRTB bid. `winNoticeUrl` is a connector setting (default
 `http://127.0.0.1:12360/win`). The exchange (mock) replaces `${AUCTION_PRICE}` with
 the clearing price in CPM.
+
+Price units end to end: the agent bids an `Amount` per impression (micro USD);
+the connector writes `price = amount.toCpm()` in the OpenRTB bid; the exchange
+calls the nurl with its clearing price in CPM; `/win` turns it back with
+`Amount::fromCpm`; the post auction service charges the banker that amount.
+**The exchange's clearing price wins**: the router does not apply `WinCostModel`
+to the settlement, a second price auction simply clears below the bid and the
+exchange says so in `${AUCTION_PRICE}`. (The router reserves the full bid price,
+the difference is released at the win.)
+
+## Running it
+
+- `build/bin/rtbkit_demo --requests 2000 --qps 500` runs everything in one
+  process (`CoreServer` + two in-process `BiddingAgent`s + a load generator) and
+  prints a summary; `--serve` keeps the services up.
+- `scripts/run_local.sh` runs `rtbkit_router` (config/rtbkit.json), two
+  `fixed_price_agent` processes (config/agents/*.json) and `mock_exchange` as
+  separate processes, prints the stats and stops them.
+- `tests/integration/end_to_end_test.cc` (`build/src/server/rtb_integration_tests`)
+  runs the full stack in-process on random ports.
 
 ## Build layout
 
@@ -163,7 +187,8 @@ its sub folders. Shared fixtures: `tests/fixtures.h` (`sampleBidRequest`,
 `sampleAgentConfig`, `sampleResponse`, `readTestFile`).
 
 Libraries: `rtb_common`, `rtb_agent_config`, `rtb_agent_protocol`, `rtb_filters`,
-`rtb_banker`, `rtb_exchange`, `rtb_router`, `rtb_post_auction`, `rtb_adserver`.
+`rtb_banker`, `rtb_exchange`, `rtb_router`, `rtb_post_auction`, `rtb_adserver`,
+`rtb_server` (`src/server`, the wired core server). Executables go to `build/bin/`.
 Test executables: `build/tests/rtb_tests` (shared, P1 + contracts) and
 `build/src/<area>/rtb_<area>_tests`.
 
@@ -180,4 +205,4 @@ integration owner if a contract must change.
 | router + agents | `src/router`, `src/agent` (bidding agent client lib; `protocol.*` and `agent_config.*` stay as they are), `apps/fixed_price_agent`, `tests/router`, `tests/agent` |
 | exchange | `src/exchange`, `apps/mock_exchange`, `tests/exchange` |
 | post auction | `src/post_auction`, `src/adserver`, `apps/adserver`, `tests/post_auction`, `tests/adserver` |
-| integration (later) | `apps/rtbkit_demo`, `scripts/`, `config/`, end-to-end tests |
+| integration | `src/server`, `apps/rtbkit_demo`, `apps/rtbkit_router`, `scripts/`, `config/`, `tests/integration` |

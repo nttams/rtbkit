@@ -2,7 +2,7 @@
 // bids the router submitted, settles the money with the banker, and tells the
 // router (which tells the agents) what happened.
 //
-// Flow, per submitted bid (item id = bidItemId(auctionId, adSpotId)):
+// Flow, per submitted bid (banker item id = bidItemId(auctionId, adSpotId, bid.agent)):
 //   onSubmittedAuction(e)   remember e until e.lossTimeout (bid is still
 //                           "in flight" at the banker). A win notice that
 //                           arrived earlier is matched now.

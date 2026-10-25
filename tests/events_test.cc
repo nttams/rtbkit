@@ -95,5 +95,6 @@ TEST_CASE("events: matched win / loss / campaign event")
 
 TEST_CASE("events: banker item id")
 {
-    CHECK(bidItemId(Id("a"), Id("1")) == "a:1");
+    CHECK(bidItemId(Id("a"), Id("1"), "bidder") == "a:1:bidder");
+    CHECK(bidItemId(Id("a"), Id("1"), "x") != bidItemId(Id("a"), Id("1"), "y"));
 }

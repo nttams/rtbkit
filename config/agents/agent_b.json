@@ -1,0 +1,34 @@
+{
+    "account": ["acme", "agent_b"],
+    "externalId": 2,
+    "bidProbability": 1.0,
+    "minTimeAvailableMs": 5,
+    "maxInFlight": 2000,
+    "creatives": [
+        {
+            "id": 1, "name": "BigBox", "format": "300x250",
+            "providerConfig": {
+                "openrtb": {
+                    "crid": "agent-b-300x250",
+                    "adm": "<a href=\"http://globex.example.com/b\"><img src=\"http://cdn.globex.example.com/b_300x250.png\" width=\"300\" height=\"250\"></a>",
+                    "adomain": ["globex.example.com"]
+                }
+            }
+        },
+        {
+            "id": 2, "name": "LeaderBoard", "format": "728x90",
+            "providerConfig": {
+                "openrtb": {
+                    "crid": "agent-b-728x90",
+                    "adm": "<a href=\"http://globex.example.com/b\"><img src=\"http://cdn.globex.example.com/b_728x90.png\" width=\"728\" height=\"90\"></a>",
+                    "adomain": ["globex.example.com"]
+                }
+            }
+        }
+    ],
+    "exchangeFilter": { "include": ["openrtb"] },
+    "languageFilter": { "include": ["en", "es", "ja"] },
+    "winFormat": "full",
+    "lossFormat": "lightweight",
+    "errorFormat": "lightweight"
+}

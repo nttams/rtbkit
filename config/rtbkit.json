@@ -1,0 +1,38 @@
+{
+    "router": {
+        "agentEndpoint": "tcp://127.0.0.1:12340",
+        "pingIntervalMs": 1000,
+        "agentTimeoutMs": 5000,
+        "lossTimeoutMs": 3000
+    },
+    "exchange": {
+        "name": "openrtb",
+        "host": "127.0.0.1",
+        "port": 12350,
+        "threads": 64,
+        "maxTmaxMs": 1000,
+        "graceMs": 50
+    },
+    "adserver": {
+        "host": "127.0.0.1",
+        "port": 12360,
+        "threads": 16
+    },
+    "postAuction": {
+        "earlyWinTimeoutMs": 10000,
+        "finishedWindowMs": 3600000,
+        "lostWindowMs": 3600000,
+        "tickIntervalMs": 100
+    },
+    "admin": {
+        "host": "127.0.0.1",
+        "port": 12370
+    },
+    "banker": {
+        "type": "memory",
+        "accounts": {
+            "acme:agent_a": { "budget": "50000000USD/1M" },
+            "acme:agent_b": { "budget": "40000USD/1M" }
+        }
+    }
+}

@@ -134,7 +134,7 @@ TEST_CASE("post auction: win matches the submission and charges the banker")
     REQUIRE(f.banker->calls().size() == 1);
     CHECK(f.banker->calls()[0].what == "win");
     CHECK(f.banker->calls()[0].account == "campaign:strategy");
-    CHECK(f.banker->calls()[0].item == "a1:1");
+    CHECK(f.banker->calls()[0].item == "a1:1:agent1");
     CHECK(f.banker->calls()[0].paid == USD_CPM(1.5));
 
     REQUIRE(f.results.size() == 1);
@@ -202,7 +202,7 @@ TEST_CASE("post auction: loss timeout cancels the bid")
     CHECK(f.results[0].winPrice.isZero());
     REQUIRE(f.banker->calls().size() == 1);
     CHECK(f.banker->calls()[0].what == "cancel");
-    CHECK(f.banker->calls()[0].item == "a1:1");
+    CHECK(f.banker->calls()[0].item == "a1:1:agent1");
     CHECK(f.service.numSubmitted() == 1);
     CHECK(f.service.statsJson()["losses"] == 1);
 

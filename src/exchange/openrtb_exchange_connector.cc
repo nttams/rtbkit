@@ -193,6 +193,7 @@ void OpenRtbExchangeConnector::handleAuction(const std::string& body,
         responseBody = errorJson(e.what()).dump();
         return;
     }
+    if (request->timestamp == Date()) request->timestamp = std::chrono::system_clock::now();
     request->timeAvailableMs = std::clamp(request->timeAvailableMs, 1.0, maxTmaxMs_);
 
     auto waiter = std::make_shared<Waiter>();

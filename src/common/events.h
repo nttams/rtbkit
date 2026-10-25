@@ -18,12 +18,15 @@
 
 namespace RTBKIT {
 
-/** Item id used with the Banker for the bid on one spot of one auction. The
-    router (authorizeBid / cancelBid) and the post auction service (winBid)
-    must agree on it. */
-inline std::string bidItemId(const Id& auctionId, const Id& adSpotId)
+/** Item id used with the Banker for one agent's bid on one spot of one
+    auction: "<auctionId>:<adSpotId>:<agent>". The agent is part of it so that
+    two agents bidding on the same spot with the same account get separate
+    reservations. The router (authorizeBid / cancelBid) and the post auction
+    service (winBid / cancelBid, using Response::agent) must agree on it. */
+inline std::string bidItemId(const Id& auctionId, const Id& adSpotId,
+                             const std::string& agent)
 {
-    return auctionId.toString() + ":" + adSpotId.toString();
+    return auctionId.toString() + ":" + adSpotId.toString() + ":" + agent;
 }
 
 /** Router -> post auction: "we answered this spot with this bid". */

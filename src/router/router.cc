@@ -473,7 +473,8 @@ struct Router::Impl {
 
         const Auction& auction = *state.auction;
         const std::string itemId = bidItemId(
-            auction.id(), auction.request().imp.at(size_t(bid.spotIndex)).id);
+            auction.id(), auction.request().imp.at(size_t(bid.spotIndex)).id,
+            response.agent);
 
         // Test agents never spend money.
         bool reserved = false;
@@ -531,8 +532,7 @@ struct Router::Impl {
             const auto& winner = best.at(size_t(response.spotIndex));
             if (winner && winner->agent == response.agent) continue;
 
-            // Same account as the winner shares the banker item: keep it.
-            if (accepted.reserved && !(winner && winner->account == response.account))
+            if (accepted.reserved)
                 banker->cancelBid(response.account, accepted.itemId);
 
             ++stats.outbid;

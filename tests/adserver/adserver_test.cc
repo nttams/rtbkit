@@ -101,7 +101,7 @@ TEST_CASE("adserver: win notice reaches the post auction service")
     CHECK(f.results[0].winPrice == USD_CPM(1.5));
     CHECK(f.results[0].winPrice.value == 1500);
     REQUIRE(f.banker->wins.size() == 1);
-    CHECK(f.banker->wins[0].first == "a1:1");
+    CHECK(f.banker->wins[0].first == "a1:1:agent1");
     CHECK(f.banker->wins[0].second == USD_CPM(1.5));
 
     auto stats = nlohmann::json::parse(c.Get("/stats")->body);
