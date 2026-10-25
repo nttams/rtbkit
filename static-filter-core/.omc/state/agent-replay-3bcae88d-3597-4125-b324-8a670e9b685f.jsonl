@@ -1,5 +1,0 @@
-{"t":0,"agent":"acbdcaf","agent_type":"untracked-native-fork","event":"agent_stop","success":true,"synthetic":true,"telemetry_status":"unmatched_stop","reason":"SubagentStop arrived without a matching SubagentStart; native Agent/Task start telemetry was not observed."}
-{"t":0,"agent":"a697bb8","agent_type":"code-reviewer","event":"agent_start","parent_mode":"none"}
-{"t":0,"agent":"a9166c7","agent_type":"code-reviewer","event":"agent_stop","success":true,"duration_ms":32069}
-{"t":0,"agent":"a7d62c3","agent_type":"untracked-native-fork","event":"agent_stop","success":true,"synthetic":true,"telemetry_status":"unmatched_stop","reason":"SubagentStop arrived without a matching SubagentStart; native Agent/Task start telemetry was not observed."}
-{"t":0,"agent":"a697bb8","agent_type":"code-reviewer","event":"agent_stop","success":true,"duration_ms":84048}

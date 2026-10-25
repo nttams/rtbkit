@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd /Users/user0/throwaway/rtbkit; diff -w rtbkit/core/router/filters/testing/static_filters_test.cc static-filter-core/tests/static_filters_test.cc | grep -v '^[<>] *$' | head -150; echo =...",
-  "error": "Exit code 1\n1,3c1,3\n< /** static_filters_test.cc                                 -*- C++ -*-\n<     Rémi Attab, 22 Aug 2013\n<     Copyright (c) 2013 Datacratic.  All rights reserved.\n---\n> // Port of rtbkit/core/router/filters/testing/static_filters_test.cc without\n> // boost.test. Each test case is a plain function; failures are counted by\n> // TEST_CHECK and make main() return non-zero.\n5,15d4\n<     Tests for the static filters.\n<     Note that these tests assume that the generic filters work p...",
-  "timestamp": "2026-10-25T07:57:10.887Z",
-  "retry_count": 1
-}
