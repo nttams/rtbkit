@@ -16,7 +16,7 @@
     "adserver": {
         "host": "127.0.0.1",
         "port": 12360,
-        "threads": 16
+        "threads": 2
     },
     "postAuction": {
         "earlyWinTimeoutMs": 10000,

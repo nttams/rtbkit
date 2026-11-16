@@ -4,6 +4,6 @@ rtb_add_library(rtb_exchange
         exchange_connector.cc
         openrtb_exchange_connector.cc
         mock_exchange_support.cc
-    DEPS rtb_agent_config rtb_common rtb::asio llhttp::llhttp_shared Threads::Threads)
+    DEPS rtb_agent_config rtb_common rtb_http Threads::Threads)
 
-rtb_add_area_tests(exchange DEPS rtb_exchange)
+rtb_add_area_tests(exchange DEPS rtb_exchange httplib::httplib)

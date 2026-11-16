@@ -5,7 +5,7 @@ rtb_add_library(rtb_server
     SOURCES
         core_server.cc
     DEPS rtb_router rtb_post_auction rtb_adserver rtb_exchange rtb_banker
-         rtb_common httplib::httplib Threads::Threads)
+         rtb_common rtb_http Threads::Threads)
 
 # End to end tests: tests/integration/*_test.cc (rtb_integration_tests).
-rtb_add_area_tests(integration DEPS rtb_server rtb_bidding_agent)
+rtb_add_area_tests(integration DEPS rtb_server rtb_bidding_agent httplib::httplib)

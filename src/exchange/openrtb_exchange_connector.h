@@ -37,6 +37,7 @@
 #pragma once
 
 #include "exchange/exchange_connector.h"
+#include "http/http_server.h"
 
 #include <atomic>
 #include <cstdint>
@@ -76,11 +77,15 @@ public:
     const std::string& winNoticeUrl() const { return winNoticeUrl_; }
 
 private:
-    struct Server;
-    class Session;
+    struct Pending;
 
-    /** Parses the body and submits the auction. Returns it, or null with
-        status / responseBody set when the request is answered at once. */
+    void onAuctionRequest(const HttpRequest& request, HttpResponder responder);
+    /** Sends the answer, once: on the router's completion or at the deadline. */
+    void answer(Pending& pending, Auction& auction, bool deadline);
+
+    /** Parses the body and creates the auction (not submitted yet). Returns
+        it, or null with status / responseBody set when the request is
+        answered at once. */
     std::shared_ptr<Auction> beginAuction(const std::string& body,
                                           Auction::TimePoint firstData,
                                           Auction::Completion onFinished,
@@ -100,7 +105,7 @@ private:
     double maxTmaxMs_ = 1000;
     double graceMs_ = 50;
 
-    std::shared_ptr<Server> server_;
+    std::shared_ptr<HttpServer> server_;
 
     std::atomic<uint64_t> requests_{0}, bids_{0}, noBids_{0}, timeouts_{0},
                           expiredInQueue_{0}, badRequests_{0}, errors_{0};

@@ -36,9 +36,10 @@
 #include <string>
 #include <thread>
 
-namespace httplib { class Server; }
 
 namespace RTBKIT {
+
+class HttpServer;
 
 class CoreServer {
 public:
@@ -82,8 +83,7 @@ private:
     std::unique_ptr<Router> router_;
     std::shared_ptr<OpenRtbExchangeConnector> connector_;
 
-    std::unique_ptr<httplib::Server> admin_;
-    std::thread adminThread_;
+    std::unique_ptr<HttpServer> admin_;
     int adminPort_ = 0;
     bool started_ = false;
 };

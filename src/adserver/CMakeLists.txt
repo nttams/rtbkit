@@ -2,6 +2,6 @@
 rtb_add_library(rtb_adserver
     SOURCES
         adserver.cc
-    DEPS rtb_post_auction rtb_common httplib::httplib Threads::Threads)
+    DEPS rtb_post_auction rtb_common rtb_http Threads::Threads)
 
-rtb_add_area_tests(adserver DEPS rtb_adserver)
+rtb_add_area_tests(adserver DEPS rtb_adserver httplib::httplib)

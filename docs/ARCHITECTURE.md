@@ -54,15 +54,22 @@ the connector answers 204.
   caught, logged and counted in the router `errors` stat; it never ends the
   process. A banker failure while accepting a bid means `NOBUDGET`; at the end
   of an auction every banker call is guarded, so `auction->finish()` always runs.
-- **Exchange connector: asynchronous** (asio + llhttp), like the original
-  `HttpExchangeConnector`. A few event loop threads (`threads`, default 2)
-  serve every connection. A thread parses a request, calls `submit(auction)`
-  and moves on; no thread waits for an auction. The completion callback runs
-  on the router thread and only posts the reply onto the connection's strand.
-  A timer answers 204 at expiry + `graceMs` if the router never finishes. The
-  auction clock starts at the request's first byte; a request whose tmax is
-  already over once read is answered 204 without an auction (`expiredInQueue`).
-- **Ad server: own HTTP threads.** Calls `PostAuctionService::onEvent`.
+- **HTTP: asynchronous** (`src/http/HttpServer`, asio + llhttp), the
+  counterpart of the original soa `HttpEndpoint`. A few event loop threads
+  serve every connection; a handler may answer later from any thread through
+  its `HttpResponder`. Used by the exchange connector, the ad server and the
+  admin endpoint. `stop()` closes idle connections and waits (up to a drain
+  timeout) for answers in progress.
+- **Exchange connector:** like the original `HttpExchangeConnector`, a few
+  event loop threads (`threads`, default 2) serve every connection. A thread
+  parses a request, calls `submit(auction)` and moves on; no thread waits for
+  an auction. The completion callback runs on the router thread and only posts
+  the auction back to an event loop thread, which builds and sends the reply. A timer answers 204 at expiry +
+  `graceMs` if the router never finishes. The auction clock starts at the
+  request's first byte; a request whose tmax is already over once read is
+  answered 204 without an auction (`expiredInQueue`).
+- **Ad server:** on its own `HttpServer` (default 2 threads), like the
+  original `HttpAdServerConnector`. Calls `PostAuctionService::onEvent`.
 - **Post auction:** methods are thread safe; `tick(now)` is called by a timer
   thread (or the router loop).
 - **Banker:** thread safe (called from router and post auction threads).

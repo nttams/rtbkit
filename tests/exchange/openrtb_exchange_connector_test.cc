@@ -489,7 +489,7 @@ TEST_CASE("openrtb exchange connector: bad HTTP and too large bodies")
     RawClient client(f.connector.port());
     client.send("THIS IS NOT HTTP\r\n\r\n");
     CHECK(client.readAll().rfind("HTTP/1.1 400", 0) == 0);
-    CHECK(f.connector.stats().badRequests == 2);
+    CHECK(f.connector.stats().requests == 0);   // rejected before the connector
 }
 
 TEST_CASE("openrtb exchange connector: a connection that idles before its first request is not expired")

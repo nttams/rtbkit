@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 COUNT="${1:-2000}"
 QPS="${2:-500}"
-BIN="$ROOT/build/bin"
+BIN="${RTB_BIN:-$ROOT/build/bin}"
 LOGS="$(mktemp -d "${TMPDIR:-/tmp}/rtbkit-local.XXXXXX")"
 PIDS=()
 MOCK_PID=

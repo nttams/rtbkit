@@ -14,7 +14,8 @@
 //   GET /stats           -> 200 JSON, PostAuctionService::statsJson()
 // Replies 200 "ok" for a valid event (even if it later matches nothing), 400
 // for missing or bad parameters (non-numeric, negative or non-finite price,
-// unknown currency).
+// unknown currency). Served by the asynchronous HttpServer (http/), like the
+// original HttpAdServerConnector on its HttpEndpoint.
 #pragma once
 
 #include "common/events.h"
@@ -34,13 +35,13 @@ public:
     AdServer(const AdServer&) = delete;
     AdServer& operator=(const AdServer&) = delete;
 
-    /** {"port": 12360, "host": "127.0.0.1", "threads": 8}. Port 0 picks a free
+    /** {"port": 12360, "host": "127.0.0.1", "threads": 2}. Port 0 picks a free
         port (read it with port() after start()). Throws std::runtime_error. */
     void configure(const nlohmann::json& config);
 
     /** Returns when listening. Throws std::runtime_error if it cannot bind. */
     void start();
-    /** Joins the server thread, safe to call twice. */
+    /** Joins the event loop threads, safe to call twice. */
     void stop();
     /** The port in use once started, else the configured one. */
     int port() const;
@@ -51,7 +52,7 @@ private:
     PostAuctionService& postAuction_;
     std::string host_ = "127.0.0.1";
     int port_ = 12360;
-    size_t threads_ = 8;
+    size_t threads_ = 2;   ///< event loop threads (async, like the original)
     std::unique_ptr<Impl> impl_;
 };
 

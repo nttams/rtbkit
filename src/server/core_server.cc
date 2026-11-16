@@ -2,7 +2,7 @@
 
 #include "banker/banker_factory.h"
 
-#include <httplib.h>
+#include "http/http_server.h"
 
 #include <chrono>
 #include <stdexcept>
@@ -109,24 +109,27 @@ void CoreServer::start()
 
 void CoreServer::startAdmin()
 {
-    const std::string host = adminConfig_.value("host", std::string("127.0.0.1"));
-    const int port = adminConfig_.value("port", 12370);
-    auto server = std::make_unique<httplib::Server>();
-    server->Get("/stats", [this](const httplib::Request&, httplib::Response& res) {
-        res.set_content(statsJson().dump(2), "application/json");
+    auto server = std::make_unique<HttpServer>();
+    server->route("GET", "/stats", [this](const HttpRequest&, HttpResponder r) {
+        r.send({200, statsJson().dump(2), "application/json"});
     });
-    server->Get("/ping", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content("pong", "text/plain");
+    server->route("GET", "/ping", [](const HttpRequest&, HttpResponder r) {
+        r.send({200, "pong"});
     });
-    const int bound = port == 0 ? server->bind_to_any_port(host)
-                                : (server->bind_to_port(host, port) ? port : -1);
-    if (bound < 0)
-        throw std::runtime_error("core server: admin can not listen on " + host + ":"
-                                 + std::to_string(port));
-    adminPort_ = bound;
+    HttpServer::Options options;
+    options.host = adminConfig_.value("host", std::string("127.0.0.1"));
+    options.port = adminConfig_.value("port", 12370);
+    options.threads = 1;
+    options.name = "core server admin";
+    try {
+        server->start(options);
+    }
+    catch (const std::exception&) {
+        throw std::runtime_error("core server: admin can not listen on " + options.host + ":"
+                                 + std::to_string(options.port));
+    }
+    adminPort_ = server->port();
     admin_ = std::move(server);
-    adminThread_ = std::thread([s = admin_.get()] { s->listen_after_bind(); });
-    admin_->wait_until_ready();
 }
 
 void CoreServer::stop()
@@ -139,7 +142,6 @@ void CoreServer::stopAll()
 {
     if (admin_) {
         admin_->stop();
-        if (adminThread_.joinable()) adminThread_.join();
         admin_.reset();
         adminPort_ = 0;
     }

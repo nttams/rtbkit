@@ -5,7 +5,7 @@
 // in-process next to the router and the real banker.
 //
 //   adserver [--config file.json] [--port N] [--stats-interval SECONDS]
-//   config: {"adserver": {"port": 12360, "host": "127.0.0.1", "threads": 8},
+//   config: {"adserver": {"port": 12360, "host": "127.0.0.1", "threads": 2},
 //            "postAuction": {"earlyWinTimeoutMs": 10000,
 //                            "finishedWindowMs": 600000,
 //                            "lostWindowMs": 600000, "tickIntervalMs": 100,
