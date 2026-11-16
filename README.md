@@ -22,7 +22,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full flow, threads, mes
 ## Build
 
 ```
-brew install cmake ninja zeromq cppzmq nlohmann-json cpp-httplib catch2
+brew install cmake ninja zeromq cppzmq nlohmann-json cpp-httplib asio llhttp catch2
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build

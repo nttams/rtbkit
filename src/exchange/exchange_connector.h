@@ -6,14 +6,14 @@
 //     completion callback, then hands it to the router:  submit(auction)
 //   router fans out, collects bids, picks winners, calls auction->finish()
 //   completion callback (on the router thread) --> connector builds the HTTP
-//     bid response from auction->bestResponse(spot) and wakes the HTTP thread.
+//     bid response from auction->bestResponse(spot) and sends it.
 //
-// Threading: the connector owns its HTTP threads. submit() may be called from
+// Threading: the connector owns its I/O threads. submit() may be called from
 // any of them; the router takes the auction over on its own thread. The
 // completion callback runs on the router thread, so it must only hand the
-// result to the waiting HTTP thread (promise / condition variable) and return.
-// The router always finishes an auction by its expiry, even with no bids, so a
-// waiting HTTP thread is never stuck.
+// result back to the connector's own threads (e.g. post it to the connection)
+// and return. The router always finishes an auction by its expiry, even with
+// no bids; a connector should still keep its own deadline.
 #pragma once
 
 #include "common/auction.h"

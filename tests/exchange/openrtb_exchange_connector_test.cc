@@ -130,6 +130,41 @@ std::string requestBody(double tmax = 100, std::string id = "auction-1")
     return req.dump();
 }
 
+/** A plain TCP client, for what httplib can not send (pipelining, slow bodies). */
+class RawClient {
+public:
+    explicit RawClient(int port) : fd_(::socket(AF_INET, SOCK_STREAM, 0))
+    {
+        REQUIRE(fd_ >= 0);
+        timeval timeout{5, 0};
+        ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(uint16_t(port));
+        ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+        REQUIRE(::connect(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0);
+    }
+    ~RawClient() { ::close(fd_); }
+
+    void send(const std::string& data)
+    {
+        REQUIRE(::send(fd_, data.data(), data.size(), 0) == ssize_t(data.size()));
+    }
+
+    /** Everything until the server closes the connection. */
+    std::string readAll()
+    {
+        char buffer[4096];
+        std::string reply;
+        for (ssize_t n; (n = ::recv(fd_, buffer, sizeof buffer, 0)) > 0;)
+            reply.append(buffer, size_t(n));
+        return reply;
+    }
+
+private:
+    int fd_;
+};
+
 } // namespace
 
 TEST_CASE("openrtb exchange connector: bid response carries price, impid, creative and nurl")
@@ -304,36 +339,157 @@ TEST_CASE("openrtb exchange connector: a router that never finishes is cut after
     CHECK(f.connector.stats().noBids == 1);
 }
 
-TEST_CASE("openrtb exchange connector: a request that waited in the queue past its tmax is a 204 without an auction")
+TEST_CASE("openrtb exchange connector: a request whose tmax is over once it is read is a 204 without an auction")
 {
-    Fixture f({{"threads", 1}, {"graceMs", 20}});
+    Fixture f({{"graceMs", 20}});
     std::atomic<int> handled{0};
-    std::atomic<bool> firstInHandler{false};
     f.connector.setAuctionHandler([&](std::shared_ptr<Auction> auction) {
         ++handled;
-        firstInHandler = true;
-        // Keeps the only worker busy for longer than the second tmax.
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
         auction->finish();
     });
     f.start();
 
-    std::thread first([&] { f.post(requestBody(1000, "first")); });
-    while (!firstInHandler) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // The clock starts at the first byte (like the original connector): the
+    // body arrives after the 50 ms tmax.
+    const std::string body = requestBody(50, "slow");
+    const std::string head = "POST /auctions HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"
+                             "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+    RawClient client(f.connector.port());
+    client.send(head);
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    client.send(body);
+    std::string reply = client.readAll();
 
-    auto res = f.post(requestBody(50, "second"));
-    first.join();
+    CHECK(reply.rfind("HTTP/1.1 204", 0) == 0);
+    CHECK(handled == 0);
+    CHECK(f.connector.stats().expiredInQueue == 1);
+    CHECK(f.connector.stats().requests == 1);
+    CHECK(f.connector.stats().noBids == 1);
+
+    // A request sent in one go is handled normally.
+    CHECK(f.post(requestBody(1000, "fast"))->status == 204);
+    CHECK(handled == 1);
+    CHECK(f.connector.stats().expiredInQueue == 1);
+}
+
+TEST_CASE("openrtb exchange connector: one event loop thread serves many auctions at once")
+{
+    // With a thread per request, one thread could only hold one auction and
+    // the others would time out. Here every auction stays open until all of
+    // them have arrived, then the router finishes them together.
+    constexpr int clients = 20;
+    Fixture f({{"threads", 1}});
+    auto config = bidderConfig();
+    FakeRouter router;
+    std::mutex mutex;
+    std::vector<std::shared_ptr<Auction>> open;
+    f.connector.setAuctionHandler([&](std::shared_ptr<Auction> auction) {
+        std::lock_guard<std::mutex> lock(mutex);
+        open.push_back(std::move(auction));
+        if (open.size() == clients) {
+            auto all = std::move(open);
+            router.post([all, config] {
+                for (auto& a : all) {
+                    a->setResponse(bid(config, 0, 1.5));
+                    a->finish();
+                }
+            });
+        }
+    });
+    f.start();
+
+    std::vector<std::thread> threads;
+    std::atomic<int> bids{0};
+    auto begin = Clock::now();
+    for (int c = 0; c < clients; ++c) {
+        threads.emplace_back([&, c] {
+            auto res = f.post(requestBody(1000, "many-" + std::to_string(c)));
+            if (res && res->status == 200) ++bids;
+        });
+    }
+    for (auto& t : threads) t.join();
+    double ms = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+
+    CHECK(bids == clients);
+    CHECK(ms < 900);
+    CHECK(f.connector.stats().timeouts == 0);
+    CHECK(f.connector.stats().bids == uint64_t(clients));
+}
+
+TEST_CASE("openrtb exchange connector: pipelined requests on one connection are answered in order")
+{
+    Fixture f;
+    auto config = bidderConfig();
+    FakeRouter router;
+    f.connector.setAuctionHandler([&](std::shared_ptr<Auction> auction) {
+        router.post([auction, config] {
+            auction->setResponse(bid(config, 0, 2.0));
+            auction->finish();
+        });
+    });
+    f.start();
+
+    auto post = [](const std::string& body, bool close) {
+        return "POST /auctions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+               + std::string(close ? "Connection: close\r\n" : "")
+               + "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    };
+    RawClient client(f.connector.port());
+    client.send(post(requestBody(500, "p1"), false) + post(requestBody(500, "p2"), false)
+                + "GET /ping HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    std::string reply = client.readAll();
+
+    auto p1 = reply.find("\"id\":\"p1\"");
+    auto p2 = reply.find("\"id\":\"p2\"");
+    auto pong = reply.find("pong");
+    REQUIRE(p1 != std::string::npos);
+    REQUIRE(p2 != std::string::npos);
+    REQUIRE(pong != std::string::npos);
+    CHECK(p1 < p2);
+    CHECK(p2 < pong);
+    CHECK(f.connector.stats().bids == 2);
+}
+
+TEST_CASE("openrtb exchange connector: stop answers requests in flight and closes idle connections")
+{
+    Fixture f({{"graceMs", 20}});
+    std::atomic<int> handled{0};
+    f.connector.setAuctionHandler([&](std::shared_ptr<Auction>) { ++handled; });   // never finishes
+    f.start();
+
+    // An idle keep-alive connection.
+    httplib::Client idle("127.0.0.1", f.connector.port());
+    REQUIRE(idle.Get("/ping"));
+
+    httplib::Result inFlight;
+    std::thread client([&] { inFlight = f.post(requestBody(200, "in-flight")); });
+    while (handled == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    auto begin = Clock::now();
+    f.connector.stop();
+    double ms = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+    client.join();
+
+    REQUIRE(inFlight);
+    CHECK(inFlight->status == 204);
+    CHECK(ms < 1000);
+    CHECK(f.connector.stats().timeouts == 1);
+}
+
+TEST_CASE("openrtb exchange connector: bad HTTP and too large bodies")
+{
+    Fixture f({{"maxBodyBytes", 64}});
+    f.connector.setAuctionHandler([](std::shared_ptr<Auction> auction) { auction->finish(); });
+    f.start();
+
+    auto res = f.post(requestBody());
     REQUIRE(res);
-    CHECK(res->status == 204);
-    CHECK(handled == 1);   // no auction was made for the second request
-    CHECK(f.connector.stats().expiredInQueue == 1);
-    CHECK(f.connector.stats().requests == 2);
-    CHECK(f.connector.stats().noBids == 2);
+    CHECK(res->status == 413);
 
-    // A request that does not wait is handled normally.
-    CHECK(f.post(requestBody(1000, "third"))->status == 204);
-    CHECK(handled == 2);
-    CHECK(f.connector.stats().expiredInQueue == 1);
+    RawClient client(f.connector.port());
+    client.send("THIS IS NOT HTTP\r\n\r\n");
+    CHECK(client.readAll().rfind("HTTP/1.1 400", 0) == 0);
+    CHECK(f.connector.stats().badRequests == 2);
 }
 
 TEST_CASE("openrtb exchange connector: a connection that idles before its first request is not expired")

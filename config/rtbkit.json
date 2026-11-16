@@ -9,7 +9,7 @@
         "name": "openrtb",
         "host": "127.0.0.1",
         "port": 12350,
-        "threads": 64,
+        "threads": 4,
         "maxTmaxMs": 1000,
         "graceMs": 50
     },

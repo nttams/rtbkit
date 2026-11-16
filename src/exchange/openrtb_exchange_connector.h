@@ -1,4 +1,4 @@
-// OpenRTB 2.x exchange connector over HTTP (cpp-httplib), following
+// OpenRTB 2.x exchange connector over HTTP (asio + llhttp), following
 // rtbkit/plugins/exchange/openrtb_exchange_connector.{h,cc}.
 //
 //   POST /auctions   body: OpenRTB 2.x bid request (JSON)
@@ -8,17 +8,25 @@
 //     500 {"error": ...}           internal error (e.g. no auction handler)
 //   GET /ping        -> 200 "pong"
 //
-// Each HTTP thread parses the request, creates the Auction with a completion
-// callback, calls submit() and blocks until the router finishes the auction
-// (it always does by the expiry) or expiry + graceMs passes.
+// Asynchronous, like the original rtbkit HttpExchangeConnector: a few event
+// loop threads serve every connection. A thread parses the request, creates
+// the Auction (expiry = time of the request's first byte + tmax), calls
+// submit() and goes back to other connections at once; no thread waits for
+// the auction. When the router finishes it, the completion callback posts
+// the reply onto the connection; a timer answers 204 at expiry + graceMs if
+// the router never does. Keep-alive and pipelined requests are served in
+// order, one auction at a time per connection.
 //
 // configure() keys (all optional):
 //   "name"          exchange name, default "openrtb" (providerConfig.<name> of
 //                   a creative is read by getCreativeProviderData)
 //   "host"          listen address, default "127.0.0.1"
 //   "port"          default 12350, 0 = pick a free port (see port())
-//   "threads"       HTTP worker threads, default 32. A keep-alive connection
-//                   holds one thread, so keep it above the client count.
+//   "threads"       event loop threads, default 2 (numThreads in the original).
+//                   Not a limit on open auctions or connections.
+//   "idleTimeoutMs" close a connection idle (or sending a request) this long,
+//                   default 5000
+//   "maxBodyBytes"  larger requests are answered 413, default 1048576
 //   "winNoticeUrl"  default "http://127.0.0.1:12360/win"
 //   "maxTmaxMs"     upper bound for the request's tmax, default 1000
 //   "graceMs"       extra wait after the expiry, default 50
@@ -34,9 +42,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <thread>
-
-namespace httplib { class Server; }
 
 namespace RTBKIT {
 
@@ -58,7 +63,7 @@ public:
         uint64_t bids = 0;       ///< answered 200
         uint64_t noBids = 0;     ///< answered 204 (includes timeouts and expiredInQueue)
         uint64_t timeouts = 0;   ///< 204 because the auction did not finish in time
-        uint64_t expiredInQueue = 0; ///< 204 at once: waited in the HTTP queue past its tmax
+        uint64_t expiredInQueue = 0; ///< 204 at once: tmax already over when the request was read
         uint64_t badRequests = 0;///< answered 400
         uint64_t errors = 0;     ///< answered 500
     };
@@ -71,19 +76,31 @@ public:
     const std::string& winNoticeUrl() const { return winNoticeUrl_; }
 
 private:
-    void handleAuction(const std::string& body, std::string& responseBody, int& status,
-                       double queueWaitMs = 0);
+    struct Server;
+    class Session;
+
+    /** Parses the body and submits the auction. Returns it, or null with
+        status / responseBody set when the request is answered at once. */
+    std::shared_ptr<Auction> beginAuction(const std::string& body,
+                                          Auction::TimePoint firstData,
+                                          Auction::Completion onFinished,
+                                          int& status, std::string& responseBody);
+
+    /** The answer for an auction that finished (or was cut at the deadline). */
+    void endAuction(const Auction& auction, bool timedOut,
+                    int& status, std::string& responseBody);
 
     std::string host_ = "127.0.0.1";
     int configuredPort_ = 12350;
     int port_ = 0;
-    int threads_ = 32;
+    int threads_ = 2;
+    double idleTimeoutMs_ = 5000;
+    size_t maxBodyBytes_ = 1 << 20;
     std::string winNoticeUrl_ = "http://127.0.0.1:12360/win";
     double maxTmaxMs_ = 1000;
     double graceMs_ = 50;
 
-    std::unique_ptr<httplib::Server> server_;
-    std::thread thread_;
+    std::shared_ptr<Server> server_;
 
     std::atomic<uint64_t> requests_{0}, bids_{0}, noBids_{0}, timeouts_{0},
                           expiredInQueue_{0}, badRequests_{0}, errors_{0};
