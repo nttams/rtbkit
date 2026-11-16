@@ -28,7 +28,7 @@ cmake --build build
 ctest --test-dir build
 ```
 
-Redis banker (optional): `brew install hiredis redis`, then add `-DRTB_WITH_REDIS=ON`.
+Redis banker (optional): `brew install hiredis redis`, then add `-DRTB_WITH_REDIS=ON`. Bids use a local budget block that a background thread syncs with Redis (`syncIntervalMs`, `spendRate`), so Redis latency never stalls the router.
 Its tests read `RTB_REDIS_HOST` / `RTB_REDIS_PORT` and skip when no server is reachable.
 
 ## Run

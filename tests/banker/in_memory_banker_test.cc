@@ -12,6 +12,7 @@ TEST_CASE("in memory banker: budgets and hierarchy")
 {
     InMemoryBanker banker;
     banker_test::checkBudgetAndHierarchy(banker);
+    banker_test::checkParentCap(banker);
 }
 
 TEST_CASE("in memory banker: settlement")

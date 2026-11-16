@@ -37,6 +37,15 @@ inline void checkBudgetAndHierarchy(Banker& banker)
     std::vector<AccountKey> all = banker.accounts();
     CHECK(all == std::vector<AccountKey>{parent, leafA, leafB});
     CHECK(banker.summaryJson().at("accounts").size() == 3);
+}
+
+// Needs leaf budgets camp:a 100 (100 in flight) and camp:b 50 from
+// checkBudgetAndHierarchy. An ancestor budget caps the subtree at once; the
+// Redis banker only applies it when allocation is handed out, so it has its
+// own version of this scenario.
+inline void checkParentCap(Banker& banker)
+{
+    AccountKey leafB("camp:b"), parent("camp");
 
     // a parent with its own budget caps the subtree
     banker.setBudget(parent, MicroUSD(110));

@@ -130,6 +130,21 @@ price, `cancelBid` on loss or timeout, `forceWinBid` for a late win).
 `Response::account` is the account to charge (the bid's own account, else the
 config's).
 
+**Redis banker** (`-DRTB_WITH_REDIS=ON`, `"type": "redis"`) follows the original
+`SlaveBanker` + master model. `authorizeBid` / `cancelBid` / `winBid` /
+`forceWinBid` never wait for Redis: they use a local copy of each account that
+holds a block of its budget. A background thread, every `syncIntervalMs`
+(default 1000), reports spend, gives back unused budget and tops the block up
+(`spendRate` per second, default `100000USD/1M`; twice the last round's demand if
+bigger) with one atomic Lua script per account, so several routers can share
+one Redis without going over budget. Differences from the in-memory rules: a
+new or topped-up budget is usable after the next round (`setBudget` runs one at
+once); ancestor budgets limit only when budget is handed out; `inFlight` in a
+summary counts this process only; repeated wins are detected per process. With
+Redis down bids fail once the local block is used up (the sync thread logs and
+retries), nothing blocks. On destruction (or `shutdown()`) pending spend is
+flushed and the held budget returned. Details: `src/banker/redis_banker.h`.
+
 ### Agent protocol (ZeroMQ)
 
 Router binds a `ROUTER` socket (default `tcp://127.0.0.1:12340`, from
